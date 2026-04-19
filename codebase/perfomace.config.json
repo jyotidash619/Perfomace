@@ -1,0 +1,15 @@
+{
+  "default_app": "qa",
+  "apps": {
+    "qa": {
+      "name": "QA",
+      "bundle_id": "com.clearchannel.iheartradio.qa",
+      "instruments_process_name": "iHeart"
+    },
+    "legacy": {
+      "name": "Legacy QA",
+      "bundle_id": "com.clearchannel.iheartradio.legacy.qa",
+      "instruments_process_name": "iHeartRadio"
+    }
+  }
+}

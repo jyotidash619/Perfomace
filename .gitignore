@@ -1,0 +1,21 @@
+## Xcode / Swift
+DerivedData/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+xcuserdata/
+.DS_Store
+build/
+launcher/dist/
+__pycache__/
+*.pyc
+
+## PerfoMace outputs
+results/
+.setup_done
+Report_*.zip
+exports/
+history/
+
+## Instruments
+*.trace
