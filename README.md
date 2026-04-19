@@ -47,6 +47,23 @@ git clone https://github.com/jyotidash619/Perfomace.git
 cd Perfomace
 ```
 
+## How To Share This Repo
+
+Send teammates this link:
+
+- [https://github.com/jyotidash619/Perfomace](https://github.com/jyotidash619/Perfomace)
+
+If the repo is private, add them as a collaborator in GitHub first.
+
+What they should run after opening the repo:
+
+```bash
+git clone https://github.com/jyotidash619/Perfomace.git
+cd Perfomace
+```
+
+Then they can follow this README for setup, run the ready check, and launch PerfoMace.
+
 Open the launcher app:
 
 - `launcher/dist/PerfoMace Launcher v2.app`
