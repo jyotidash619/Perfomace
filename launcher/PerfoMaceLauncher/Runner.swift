@@ -146,6 +146,95 @@ private struct ComparisonSource {
     let selectedHTML: URL?
 }
 
+enum SetupCheckState: String, Sendable {
+    case ok
+    case warn
+    case fail
+
+    var displayName: String {
+        switch self {
+        case .ok: return "Ready"
+        case .warn: return "Warning"
+        case .fail: return "Blocked"
+        }
+    }
+}
+
+struct SetupCheckStatus: Identifiable, Sendable {
+    let id: String
+    let state: SetupCheckState
+    let title: String
+    let detail: String
+    let action: String
+}
+
+struct SetupSummary: Sendable {
+    let checks: [SetupCheckStatus]
+    let overallState: SetupCheckState
+    let warningCount: Int
+    let rawOutput: String
+
+    var blockingChecks: [SetupCheckStatus] {
+        checks.filter { $0.state == .fail }
+    }
+
+    var warningChecks: [SetupCheckStatus] {
+        checks.filter { $0.state == .warn }
+    }
+
+    var isReady: Bool {
+        blockingChecks.isEmpty
+    }
+
+    var headline: String {
+        switch overallState {
+        case .ok:
+            return "Ready to run"
+        case .warn:
+            return "Ready with warnings"
+        case .fail:
+            return "Needs attention"
+        }
+    }
+
+    var summaryLine: String {
+        if !blockingChecks.isEmpty {
+            let blockerLabel = blockingChecks.count == 1 ? "1 blocker" : "\(blockingChecks.count) blockers"
+            if warningCount > 0 {
+                let warningLabel = warningCount == 1 ? "1 warning" : "\(warningCount) warnings"
+                return "\(blockerLabel) · \(warningLabel)"
+            }
+            return blockerLabel
+        }
+        if warningCount > 0 {
+            return warningCount == 1 ? "1 warning to review" : "\(warningCount) warnings to review"
+        }
+        return "All setup checks passed"
+    }
+
+    var primaryFailureMessage: String {
+        if let blocker = blockingChecks.first {
+            if blocker.action.isEmpty {
+                return blocker.detail
+            }
+            return "\(blocker.detail) \(blocker.action)"
+        }
+        if let warning = warningChecks.first {
+            if warning.action.isEmpty {
+                return warning.detail
+            }
+            return "\(warning.detail) \(warning.action)"
+        }
+        return "PerfoMace setup check complete. Ready to go."
+    }
+}
+
+private struct SetupRunResult: Sendable {
+    let summary: SetupSummary?
+    let exitCode: Int32
+    let errorMessage: String?
+}
+
 func resolveHarnessRoot(from projectRoot: URL) -> URL {
     let directScript = projectRoot.appendingPathComponent("run_perf.sh")
     if FileManager.default.isExecutableFile(atPath: directScript.path) {
@@ -218,6 +307,7 @@ private func directoryLooksPopulated(_ url: URL) -> Bool {
 final class Runner: ObservableObject {
     @Published var isRunning: Bool = false
     @Published var isStopping: Bool = false
+    @Published var isCheckingSetup: Bool = false
     @Published var log: String = ""
     @Published var currentTestCase: String = "Idle"
     @Published var recentTestCases: [TestCaseStatus] = []
@@ -237,6 +327,8 @@ final class Runner: ObservableObject {
     ]
     @Published var latestReportURL: URL?
     @Published var latestResultsURL: URL?
+    @Published var setupSummary: SetupSummary?
+    @Published var setupCheckedAt: Date?
 
     private var process: Process?
     private var currentProjectRoot: URL?
@@ -266,50 +358,19 @@ final class Runner: ObservableObject {
     private var currentRunLabel: String?
 
     func run(projectRoot: URL, _ config: RunConfiguration) {
-        guard !isRunning else { return }
-        let harnessRoot = resolveHarnessRoot(from: projectRoot)
-        let resultsRoot = resolveResultsRoot(from: harnessRoot)
-        currentProjectRoot = projectRoot
-        currentHarnessRoot = harnessRoot
-        currentResultsRoot = resultsRoot
-        baseConfig = config
-
-        resetRunState(for: config, clearLog: true)
-
-        let scriptURL = harnessRoot.appendingPathComponent("run_perf.sh")
-        guard FileManager.default.isExecutableFile(atPath: scriptURL.path) else {
-            isRunning = false
-            lastError = "run_perf.sh not found or not executable at: \(scriptURL.path)"
-            return
-        }
-        preloadPlannedTests(for: config)
-
-        if config.appChoice == .combine {
-            combinedSequence = [.qa, .legacy]
-            combinedStepIndex = 0
-            combinedSessionSteps = []
-            combinedSessionDirectory = makeCombinedSessionDirectory(resultsRoot: resultsRoot)
-            guard combinedSessionDirectory != nil else {
-                isRunning = false
-                return
-            }
-            latestResultsURL = combinedSessionDirectory ?? resultsRoot
-            launchNextCombinedRun()
-            return
-        }
+        guard !isRunning, !isCheckingSetup else { return }
 
         if config.appChoice == .compare {
-            isRunning = false
             lastError = "Choose two report files in Compare mode, then generate the comparison report."
             return
         }
 
-        launchProcess(
-            projectRoot: projectRoot,
-            scriptURL: scriptURL,
-            config: config,
-            label: config.appChoice.runLabel
-        )
+        refreshSetup(projectRoot: projectRoot, config: config, shouldLaunchAfterCheck: true)
+    }
+
+    func refreshSetup(projectRoot: URL, config: RunConfiguration) {
+        guard !isCheckingSetup else { return }
+        refreshSetup(projectRoot: projectRoot, config: config, shouldLaunchAfterCheck: false)
     }
 
     func compareReports(projectRoot: URL, baselineSelection: URL, candidateSelection: URL) {
@@ -452,7 +513,101 @@ final class Runner: ObservableObject {
         flushTask = nil
     }
 
-    private func configureEnvironment(_ env: inout [String: String], for config: RunConfiguration) {
+    private func refreshSetup(projectRoot: URL, config: RunConfiguration, shouldLaunchAfterCheck: Bool) {
+        let harnessRoot = resolveHarnessRoot(from: projectRoot)
+        let setupScriptURL = harnessRoot
+            .appendingPathComponent("scripts", isDirectory: true)
+            .appendingPathComponent("setup_env.sh")
+
+        guard FileManager.default.isExecutableFile(atPath: setupScriptURL.path) || FileManager.default.fileExists(atPath: setupScriptURL.path) else {
+            let message = "setup_env.sh not found at: \(setupScriptURL.path)"
+            if shouldLaunchAfterCheck {
+                lastError = message
+            }
+            setupSummary = nil
+            return
+        }
+
+        if shouldLaunchAfterCheck {
+            currentTestCase = "Checking Setup…"
+            lastError = nil
+        }
+        isCheckingSetup = true
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Self.executeSetupCheck(
+                projectRoot: projectRoot,
+                harnessRoot: harnessRoot,
+                setupScriptURL: setupScriptURL,
+                config: config
+            )
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isCheckingSetup = false
+                self.setupSummary = result.summary
+                self.setupCheckedAt = Date()
+
+                if shouldLaunchAfterCheck {
+                    guard result.exitCode == 0, let summary = result.summary, summary.isReady else {
+                        self.isRunning = false
+                        self.currentTestCase = "Setup Needs Attention"
+                        self.lastError = result.summary?.primaryFailureMessage ?? result.errorMessage ?? "PerfoMace setup needs attention before you run."
+                        return
+                    }
+                    self.startRun(projectRoot: projectRoot, harnessRoot: harnessRoot, config: config)
+                    return
+                }
+
+                if let summary = result.summary {
+                    self.lastError = summary.isReady ? nil : summary.primaryFailureMessage
+                } else if let errorMessage = result.errorMessage {
+                    self.lastError = errorMessage
+                }
+            }
+        }
+    }
+
+    private func startRun(projectRoot: URL, harnessRoot: URL, config: RunConfiguration) {
+        let resultsRoot = resolveResultsRoot(from: harnessRoot)
+        currentProjectRoot = projectRoot
+        currentHarnessRoot = harnessRoot
+        currentResultsRoot = resultsRoot
+        baseConfig = config
+
+        resetRunState(for: config, clearLog: true)
+
+        let scriptURL = harnessRoot.appendingPathComponent("run_perf.sh")
+        guard FileManager.default.isExecutableFile(atPath: scriptURL.path) else {
+            isRunning = false
+            lastError = "run_perf.sh not found or not executable at: \(scriptURL.path)"
+            return
+        }
+        preloadPlannedTests(for: config)
+
+        if config.appChoice == .combine {
+            combinedSequence = [.qa, .legacy]
+            combinedStepIndex = 0
+            combinedSessionSteps = []
+            combinedSessionDirectory = makeCombinedSessionDirectory(resultsRoot: resultsRoot)
+            guard combinedSessionDirectory != nil else {
+                isRunning = false
+                return
+            }
+            latestResultsURL = combinedSessionDirectory ?? resultsRoot
+            launchNextCombinedRun()
+            return
+        }
+
+        launchProcess(
+            projectRoot: projectRoot,
+            scriptURL: scriptURL,
+            config: config,
+            label: config.appChoice.runLabel
+        )
+    }
+
+    nonisolated private static func configureEnvironment(_ env: inout [String: String], for config: RunConfiguration) {
         switch config.appChoice {
         case .qa:
             env["PERF_APP"] = "qa"
@@ -491,6 +646,100 @@ final class Runner: ObservableObject {
         env["INSTRUMENTS_ALLOCATIONS"] = config.instrumentsAllocations ? "1" : "0"
     }
 
+    nonisolated private static func executeSetupCheck(
+        projectRoot: URL,
+        harnessRoot: URL,
+        setupScriptURL: URL,
+        config: RunConfiguration
+    ) -> SetupRunResult {
+        let process = Process()
+        process.currentDirectoryURL = harnessRoot
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [setupScriptURL.path]
+
+        var environment = ProcessInfo.processInfo.environment
+        Self.configureEnvironment(&environment, for: config)
+        environment["PERFOMACE_SETUP_FORMAT"] = "structured"
+        environment["PERFOMACE_PROJECT_ROOT"] = projectRoot.path
+        process.environment = environment
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        do {
+            try process.run()
+        } catch {
+            return SetupRunResult(summary: nil, exitCode: 1, errorMessage: "Unable to launch the setup check: \(error.localizedDescription)")
+        }
+
+        process.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: data, encoding: .utf8) ?? ""
+        let summary = parseSetupSummary(from: output)
+        let errorMessage: String?
+        if summary == nil {
+            if output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                errorMessage = "PerfoMace setup check returned no output."
+            } else {
+                errorMessage = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        } else {
+            errorMessage = nil
+        }
+        return SetupRunResult(summary: summary, exitCode: process.terminationStatus, errorMessage: errorMessage)
+    }
+
+    nonisolated private static func parseSetupSummary(from output: String) -> SetupSummary? {
+        var checks: [SetupCheckStatus] = []
+        var overallState: SetupCheckState = .ok
+        var warningCount = 0
+
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            if line.hasPrefix("SETUP_CHECK|") {
+                let parts = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+                guard parts.count >= 6 else { continue }
+                let state = SetupCheckState(rawValue: parts[2]) ?? .warn
+                checks.append(
+                    SetupCheckStatus(
+                        id: parts[1],
+                        state: state,
+                        title: parts[3],
+                        detail: parts[4],
+                        action: parts[5]
+                    )
+                )
+                continue
+            }
+
+            if line.hasPrefix("SETUP_SUMMARY|") {
+                let parts = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+                if parts.count >= 4 {
+                    switch parts[1] {
+                    case "ready":
+                        overallState = .ok
+                    case "warning":
+                        overallState = .warn
+                    case "failed":
+                        overallState = .fail
+                    default:
+                        overallState = .warn
+                    }
+                    warningCount = Int(parts[3]) ?? warningCount
+                }
+            }
+        }
+
+        guard !checks.isEmpty else { return nil }
+        return SetupSummary(
+            checks: checks,
+            overallState: overallState,
+            warningCount: warningCount,
+            rawOutput: output
+        )
+    }
+
     private func launchProcess(projectRoot: URL, scriptURL: URL, config: RunConfiguration, label: String) {
         currentAppChoice = config.appChoice
         currentRunLabel = label
@@ -507,7 +756,7 @@ final class Runner: ObservableObject {
         p.arguments = [scriptURL.path]
 
         var env = ProcessInfo.processInfo.environment
-        configureEnvironment(&env, for: config)
+        Self.configureEnvironment(&env, for: config)
         p.environment = env
 
         let out = Pipe()

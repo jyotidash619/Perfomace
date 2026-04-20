@@ -104,8 +104,21 @@ struct ContentView: View {
     }
 
     private var footerPrimaryActionTitle: String {
+        if runner.isCheckingSetup { return "Checking Setup…" }
         if runner.isRunning { return "\(overallRunStatus)…" }
         return config.appChoice == .compare ? "Create Compared Report" : "Run"
+    }
+
+    private var orderedSetupChecks: [SetupCheckStatus] {
+        guard let summary = runner.setupSummary else { return [] }
+        return summary.checks.sorted { lhs, rhs in
+            let leftRank = setupRank(for: lhs.state)
+            let rightRank = setupRank(for: rhs.state)
+            if leftRank == rightRank {
+                return lhs.title < rhs.title
+            }
+            return leftRank < rightRank
+        }
     }
 
     var body: some View {
@@ -129,6 +142,11 @@ struct ContentView: View {
                                         .tint(sapphire)
                                 }
                             }
+                        }
+                        .groupBoxStyle(CardGroupBoxStyle())
+
+                        GroupBox("Setup Readiness") {
+                            setupReadinessCard
                         }
                         .groupBoxStyle(CardGroupBoxStyle())
 
@@ -297,6 +315,7 @@ struct ContentView: View {
             }
             .onAppear {
                 autoDetectProjectPathIfNeeded()
+                refreshSetupIfPossible()
                 if detailTab == .report {
                     loadReportIfPresent()
                 }
@@ -323,8 +342,17 @@ struct ContentView: View {
                 }
             }
             .onChange(of: projectPath) { _, _ in
+                refreshSetupIfPossible()
                 if detailTab == .report {
                     loadReportIfPresent()
+                }
+            }
+            .onChange(of: config.appChoice) { _, _ in
+                refreshSetupIfPossible()
+            }
+            .onChange(of: config.customBundleId) { _, _ in
+                if config.appChoice == .custom {
+                    refreshSetupIfPossible()
                 }
             }
             .onChange(of: compareBaselineURL) { _, _ in
@@ -444,6 +472,7 @@ struct ContentView: View {
                 .controlSize(.small)
                 .disabled(
                     runner.isRunning
+                    || runner.isCheckingSetup
                     || projectRoot == nil
                     || (config.appChoice == .custom && config.customBundleId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     || (config.appChoice != .compare && config.selectedScenarios.isEmpty)
@@ -501,6 +530,62 @@ struct ContentView: View {
                 )
         )
         .shadow(color: sapphire.opacity(0.05), radius: 6, x: 0, y: 2)
+    }
+
+    private var setupReadinessCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(setupHeadline)
+                        .font(.system(size: 14, weight: .semibold, design: .default))
+                        .foregroundStyle(deepSapphire)
+                    Text(setupSubheadline)
+                        .font(.system(size: 11, weight: .regular, design: .default))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                statusPill(
+                    runner.isCheckingSetup ? "Checking" : setupStatusLabel,
+                    isRunning: runner.isCheckingSetup,
+                    isFailed: runner.setupSummary?.overallState == .fail
+                )
+            }
+
+            if config.appChoice == .compare {
+                Text("Compare mode only needs saved reports, so device and signing checks are skipped.")
+                    .font(.system(size: 11, weight: .medium, design: .default))
+                    .foregroundStyle(.secondary)
+            } else if projectRoot == nil {
+                Text("Choose the PerfoMace codebase first, then the launcher will inspect your Mac and show exact fixes here.")
+                    .font(.system(size: 11, weight: .medium, design: .default))
+                    .foregroundStyle(.secondary)
+            } else if runner.setupSummary != nil {
+                ForEach(orderedSetupChecks) { check in
+                    setupCheckRow(check)
+                }
+
+                if let checkedAt = runner.setupCheckedAt {
+                    Text("Last checked at \(setupTimestampFormatter.string(from: checkedAt)).")
+                        .font(.system(size: 10.5, weight: .regular, design: .default))
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Run a setup refresh to inspect the machine before your next run.")
+                    .font(.system(size: 11, weight: .medium, design: .default))
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Spacer()
+                Button("Refresh Setup") {
+                    refreshSetupIfPossible(force: true)
+                }
+                .buttonStyle(.bordered)
+                .tint(sapphire)
+                .disabled(projectRoot == nil || runner.isCheckingSetup || config.appChoice == .compare)
+            }
+        }
     }
 
     private func loadReportIfPresent() {
@@ -564,6 +649,94 @@ struct ContentView: View {
         if panel.runModal() == .OK, let url = panel.url {
             projectPath = url.path
         }
+    }
+
+    private func refreshSetupIfPossible(force: Bool = false) {
+        guard let root = projectRoot else { return }
+        guard config.appChoice != .compare else { return }
+        if force || !runner.isCheckingSetup {
+            runner.refreshSetup(projectRoot: root, config: config)
+        }
+    }
+
+    private func setupRank(for state: SetupCheckState) -> Int {
+        switch state {
+        case .fail:
+            return 0
+        case .warn:
+            return 1
+        case .ok:
+            return 2
+        }
+    }
+
+    private var setupHeadline: String {
+        if config.appChoice == .compare {
+            return "Compare-only mode"
+        }
+        if runner.isCheckingSetup {
+            return "Checking this Mac now"
+        }
+        return runner.setupSummary?.headline ?? "Ready check available"
+    }
+
+    private var setupSubheadline: String {
+        if config.appChoice == .compare {
+            return "Pick saved reports and compare them without rechecking devices or signing."
+        }
+        if runner.isCheckingSetup {
+            return "PerfoMace is validating Xcode, toolchain, targets, and signing hints before you run."
+        }
+        return runner.setupSummary?.summaryLine ?? "Refresh setup to see exact blockers and fix steps before a run starts."
+    }
+
+    private var setupStatusLabel: String {
+        switch runner.setupSummary?.overallState {
+        case .ok:
+            return "Ready"
+        case .warn:
+            return "Warn"
+        case .fail:
+            return "Blocked"
+        case .none:
+            return "Unknown"
+        }
+    }
+
+    private var setupTimestampFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter
+    }
+
+    private func setupCheckRow(_ check: SetupCheckStatus) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(check.title)
+                    .font(.system(size: 12, weight: .semibold, design: .default))
+                    .foregroundStyle(deepSapphire)
+                Spacer()
+                statusPill(
+                    check.state.displayName,
+                    isFailed: check.state == .fail
+                )
+            }
+
+            Text(check.detail)
+                .font(.system(size: 11, weight: .medium, design: .default))
+                .foregroundStyle(check.state == .fail ? rose : deepSapphire.opacity(0.72))
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !check.action.isEmpty {
+                Text("Fix: \(check.action)")
+                    .font(.system(size: 10.5, weight: .regular, design: .default))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .background(cardBackground(cornerRadius: 14))
     }
 
     private func scenarioBinding(_ scenario: RunConfiguration.Scenario) -> Binding<Bool> {
@@ -917,6 +1090,7 @@ struct ContentView: View {
     }
 
     private var overallRunStatus: String {
+        if runner.isCheckingSetup { return "Checking Setup" }
         if runner.isStopping { return "Stopping" }
         if runner.isRunning {
             switch runner.currentTestCase {
