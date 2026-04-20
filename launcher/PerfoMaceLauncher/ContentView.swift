@@ -45,7 +45,16 @@ struct ContentView: View {
 
     private var harnessRoot: URL? { projectRoot.map(resolveHarnessRoot(from:)) }
 
+    private var workspaceRoot: URL? {
+        guard let harnessRoot else { return nil }
+        return harnessRoot.lastPathComponent == "codebase" ? harnessRoot.deletingLastPathComponent() : harnessRoot
+    }
+
     private var resultsRoot: URL? { harnessRoot.map(resolveResultsRoot(from:)) }
+
+    private var readyCheckAppURL: URL? {
+        workspaceRoot?.appendingPathComponent("launcher/dist/PerfoMace Ready Check.app")
+    }
 
     private var reportPath: URL? { latestSavedRunReportURL(in: resultsRoot) }
 
@@ -578,6 +587,13 @@ struct ContentView: View {
 
             HStack {
                 Spacer()
+                Button("Run Ready Check") {
+                    openReadyCheckApp()
+                }
+                .buttonStyle(.bordered)
+                .tint(golden)
+                .disabled(projectRoot == nil || config.appChoice == .compare)
+
                 Button("Refresh Setup") {
                     refreshSetupIfPossible(force: true)
                 }
@@ -657,6 +673,19 @@ struct ContentView: View {
         if force || !runner.isCheckingSetup {
             runner.refreshSetup(projectRoot: root, config: config)
         }
+    }
+
+    private func openReadyCheckApp() {
+        guard let readyCheckAppURL else { return }
+        if FileManager.default.fileExists(atPath: readyCheckAppURL.path) {
+            let opened = NSWorkspace.shared.open(readyCheckAppURL)
+            if !opened {
+                runner.lastError = "PerfoMace Ready Check.app could not be opened from: \(readyCheckAppURL.path)"
+            }
+            return
+        }
+
+        runner.lastError = "PerfoMace Ready Check.app was not found at: \(readyCheckAppURL.path). Rebuild the launcher bundle to regenerate it."
     }
 
     private func setupRank(for state: SetupCheckState) -> Int {
