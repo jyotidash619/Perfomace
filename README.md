@@ -47,6 +47,8 @@ git clone https://github.com/jyotidash619/Perfomace.git
 cd Perfomace
 ```
 
+If you are cloning from Git and building in Xcode, read the `Bundle Identifier / Signing` note below before trying a real-device run.
+
 ## How To Share This Repo
 
 Send teammates this link:
@@ -115,6 +117,55 @@ Success output:
 
 PerfoMace also validates that the selected QA or Legacy app is already installed on the chosen simulator or iPhone before starting the full run.
 On a physical iPhone, if Xcode has no signed-in Apple account or no provisioning profile for the PerfoMace app / UI test runner, PerfoMace now stops after the build failure with a direct signing message and skips standalone Instruments noise by default.
+
+## Bundle Identifier / Signing
+
+If you are using the shared zip and just opening the packaged launcher app, you usually do not need to touch bundle identifiers.
+
+If you are cloning from Git and building from Xcode, bundle identifiers matter for iPhone builds and UI tests.
+
+What a bundle identifier is:
+- it is the unique app id Xcode tries to register with Apple for signing
+- examples in this project are:
+  - `atlantis-proxyman.PerfoMace2`
+  - `atlantis-proxyman.PerfoMaceTests2`
+  - `atlantis-proxyman.PerfoMaceUITests2`
+  - `atlantis-proxyman.PerfoMaceLauncherV2`
+
+When to keep it as-is:
+- keep it as-is only if your Apple development team already owns that identifier and Xcode signs successfully
+
+When to change it:
+- if Xcode says `Failed Registering Bundle Identifier`
+- if it says the identifier `cannot be registered` or `is not available`
+- if you are using your own `Personal Team` or a different Apple team from the original project owner
+
+What to change:
+- for iPhone runs, change the identifiers for these targets in `Signing & Capabilities` so they are unique for your team:
+  - `PerfoMace`
+  - `PerfoMaceTests`
+  - `PerfoMaceUITests`
+
+Safe example pattern:
+- `com.yourname.PerfoMace`
+- `com.yourname.PerfoMaceTests`
+- `com.yourname.PerfoMaceUITests`
+
+Important:
+- each target needs its own unique identifier
+- do not give the app target and UI test target the same identifier
+- if one target changes, the others do not need to match exactly, they just need to stay unique
+
+For the screenshot error you showed:
+- `atlantis-proxyman.PerfoMaceUITests2` is not available for your team
+- change only that target to something unique like `com.marksawyer.PerfoMaceUITests`
+- if the app target later shows the same error, give `PerfoMace` its own unique id too
+
+After changing the bundle ids:
+- keep `Automatically manage signing` on
+- choose your team
+- press `Try Again`
+- rerun the Ready Check or build again
 
 ## Running From Terminal
 
@@ -193,6 +244,19 @@ xcodebuild -runFirstLaunch
 - choose a valid signing team/profile for both the app target and UI test runner
 - let Xcode finish preparing the device
 - rerun PerfoMace
+
+### If Xcode says `Failed Registering Bundle Identifier`
+
+- you are most likely using a different Apple team from the original project owner
+- open `Signing & Capabilities`
+- select the failing target
+- change its bundle identifier to a unique value for your team
+- keep `Automatically manage signing` on and press `Try Again`
+
+Common real-device targets to update:
+- `PerfoMace`
+- `PerfoMaceUITests`
+- `PerfoMaceTests`
 
 ### If no simulator destination is found
 

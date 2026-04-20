@@ -92,6 +92,48 @@ cd "/path/to/PerfoMace v2"
 xcodebuild -project "PerfoMace.xcodeproj" -scheme PerfoMace -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO build-for-testing
 ```
 
+## Bundle Identifier / Signing
+
+If you use the packaged launcher app from the shared zip, you usually do not need to change bundle identifiers.
+
+If you clone the repo and build from Xcode, a real-device build may require new bundle identifiers for your Apple team.
+
+What this means:
+- a bundle identifier is the unique app id Apple uses for signing
+- this repo currently uses ids like:
+  - `atlantis-proxyman.PerfoMace2`
+  - `atlantis-proxyman.PerfoMaceTests2`
+  - `atlantis-proxyman.PerfoMaceUITests2`
+
+Keep them as-is only if:
+- Xcode signs successfully with your team
+
+Change them if Xcode says:
+- `Failed Registering Bundle Identifier`
+- `cannot be registered`
+- `is not available`
+
+Targets that usually need unique ids for your team:
+- `PerfoMace`
+- `PerfoMaceTests`
+- `PerfoMaceUITests`
+
+Safe example pattern:
+- `com.yourname.PerfoMace`
+- `com.yourname.PerfoMaceTests`
+- `com.yourname.PerfoMaceUITests`
+
+Important:
+- each target must stay unique
+- do not reuse the same identifier across app and test targets
+- leave `Automatically manage signing` enabled
+
+If your screenshot shows `atlantis-proxyman.PerfoMaceUITests2` is unavailable:
+- open the `PerfoMaceUITests` target
+- set a unique identifier like `com.yourname.PerfoMaceUITests`
+- press `Try Again`
+- if `PerfoMace` later shows the same error, give that target its own unique id too
+
 ## If You Want To Run From Terminal Instead Of The Launcher
 
 QA:
@@ -212,6 +254,14 @@ If the script says the real-device build failed because of `No Accounts` or miss
 - go to `Settings > Accounts` and sign in with the Apple account used for device builds
 - open the project signing settings and choose a valid team for both the PerfoMace app target and the UI test runner target
 - rerun PerfoMace after Xcode finishes preparing the device
+
+If Xcode says `Failed Registering Bundle Identifier`:
+
+- open `Signing & Capabilities`
+- select the failing target
+- replace the bundle identifier with a unique value for your team
+- keep `Automatically manage signing` on
+- press `Try Again`
 
 If the script says `No available simulator destination could be resolved`:
 
