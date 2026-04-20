@@ -65,11 +65,17 @@ Open the packaged launcher app:
 
 - `launcher/dist/PerfoMace Launcher v2.app`
 
+For a separate double-click machine readiness check:
+
+- `launcher/dist/PerfoMace Ready Check.app`
+
 If macOS blocks the app the first time:
 
 ```bash
 xattr -dr com.apple.quarantine "launcher/dist/PerfoMace Launcher v2.app"
 open "launcher/dist/PerfoMace Launcher v2.app"
+xattr -dr com.apple.quarantine "launcher/dist/PerfoMace Ready Check.app"
+open "launcher/dist/PerfoMace Ready Check.app"
 ```
 
 ## If You Want To Build The Launcher Yourself
@@ -113,16 +119,26 @@ cd "/path/to/PerfoMace v2"
 bash ./PerfoMace_Ready_Check.sh
 ```
 
+Or just double-click:
+
+- `launcher/dist/PerfoMace Ready Check.app`
+
 It will try to self-heal common local issues such as:
 - broken `TMPDIR`
 - missing writable temp folder
 - bad current Xcode developer directory for this shell session
+- missing `python3`
+- no usable iOS simulator/runtime or prepared device
 
 When everything is healthy, it will print:
 
 - `PerfoMace setup check complete. Ready to go.`
 
 If the Mac still needs manual help, it will stop early and tell you exactly what to run next.
+
+PerfoMace now also validates the selected target app at run time before the full harness starts.
+If `com.clearchannel.iheartradio.qa` or `com.clearchannel.iheartradio.legacy.qa` is not installed on the chosen simulator or iPhone, the run will fail immediately with a clear message instead of failing later inside UI tests.
+For real-device runs, if Xcode has no signed-in Apple account or no provisioning profiles for the PerfoMace app and UI test runner, the run will now stop immediately after build failure with a direct signing message instead of wasting time on doomed Instruments traces.
 
 ## How To Run
 
@@ -187,6 +203,13 @@ If the script says `No USB device found`:
 - connect and unlock the iPhone
 - tap `Trust` if prompted
 - make sure Developer Mode is enabled on the phone
+
+If the script says the real-device build failed because of `No Accounts` or missing provisioning profiles:
+
+- open Xcode
+- go to `Settings > Accounts` and sign in with the Apple account used for device builds
+- open the project signing settings and choose a valid team for both the PerfoMace app target and the UI test runner target
+- rerun PerfoMace after Xcode finishes preparing the device
 
 If the script says `No available simulator destination could be resolved`:
 

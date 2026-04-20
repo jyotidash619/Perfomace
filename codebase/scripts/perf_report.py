@@ -1388,7 +1388,7 @@ def _build_scenario_cards(custom_summary, trace_summaries):
         instruments = []
         for trace_name, info in (trace_summaries or {}).items():
             trace_metrics = _select_trace_metrics(info.get("summary") or {}, TRACE_SCENARIO_HINTS.get(trace_name, []))
-            if trace_metrics or info.get("error"):
+            if trace_metrics:
                 instruments.append(
                     {
                         "trace": trace_name,

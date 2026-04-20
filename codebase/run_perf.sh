@@ -34,6 +34,41 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   exit 127
 fi
 
+build_inputs_signature() {
+  if ! command -v shasum >/dev/null 2>&1; then
+    echo "no-shasum"
+    return 0
+  fi
+
+  local manifest
+  manifest="$(mktemp "/tmp/perf_build_inputs.XXXXXX")"
+
+  {
+    for path in \
+      "$PROJECT_ROOT/PerfoMace.xcodeproj/project.pbxproj" \
+      "$PROJECT_ROOT/PerfoMace.xcodeproj/xcshareddata/xcschemes/PerfoMace.xcscheme" \
+      "$SCRIPT_DIR/run_perf.sh" \
+      "$SCRIPT_DIR/perfomace.config.json"; do
+      [ -f "$path" ] && shasum "$path"
+    done
+
+    find \
+      "$PROJECT_ROOT/codebase/PerfoMace" \
+      "$PROJECT_ROOT/codebase/PerfoMaceTests" \
+      "$PROJECT_ROOT/codebase/PerfoMaceUITests" \
+      -type f \
+      \( -name '*.swift' -o -name '*.plist' \) \
+      -print0 2>/dev/null | xargs -0 shasum 2>/dev/null
+  } | LC_ALL=C sort > "$manifest"
+
+  shasum "$manifest" | awk '{print $1}'
+  rm -f "$manifest"
+}
+
+xcode_version_signature() {
+  xcodebuild -version 2>/dev/null | tr '\n' '|' | sed 's/|$//'
+}
+
 emit_phase() {
   local phase="$1"
   echo "PERF_PHASE phase=$phase" | tee -a "$LOG_PATH"
@@ -309,7 +344,8 @@ for runtime, devices in data.get("devices", {}).items():
 if not matches:
     sys.exit(1)
 
-print(matches[0][1])
+preferred = [item for item in matches if "iphone" in item[0].lower()]
+print((preferred or matches)[0][1])
 PY
 }
 
@@ -331,6 +367,7 @@ import sys
 name_filter = (sys.argv[1] or "").strip().lower()
 text = os.environ.get("DESTINATIONS_TEXT", "")
 
+matches = []
 for raw_line in text.splitlines():
     line = raw_line.strip()
     if not line.startswith("{ platform:iOS,"):
@@ -347,10 +384,13 @@ for raw_line in text.splitlines():
     if name_filter and name_filter not in name.lower():
         continue
 
-    print(id_match.group(1).strip())
-    sys.exit(0)
+    matches.append((name, id_match.group(1).strip()))
 
-sys.exit(1)
+if not matches:
+    sys.exit(1)
+
+preferred = [item for item in matches if "iphone" in item[0].lower()]
+print((preferred or matches)[0][1])
 PY
       ;;
     simulator)
@@ -418,7 +458,7 @@ if [ -n "${DESTINATION_OVERRIDE:-}" ]; then
 elif [ -n "$REAL_DEVICE_ID" ]; then
     echo "✅ Found Real Device connected! (ID: $REAL_DEVICE_ID)"
     DESTINATION="platform=iOS,id=$REAL_DEVICE_ID"
-    SIM_UDID="$REAL_DEVICE_ID"
+    SIM_UDID=""
 else
     SIM_AVAILABLE=1
     if [ -n "$SIMULATOR_NAME" ]; then
@@ -441,6 +481,148 @@ else
     fi
     DESTINATION="platform=iOS Simulator,id=$SIM_UDID"
 fi
+
+boot_simulator_if_needed() {
+  [ -n "${SIM_UDID:-}" ] || return 0
+  xcrun simctl boot "$SIM_UDID" >/dev/null 2>&1 || true
+  xcrun simctl bootstatus "$SIM_UDID" -b >/dev/null 2>&1 || true
+}
+
+simulator_has_target_app() {
+  local simulator_udid="$1"
+  local bundle_id="$2"
+  xcrun simctl appinfo "$simulator_udid" "$bundle_id" >/dev/null 2>&1
+}
+
+device_has_target_app() {
+  local device_id="$1"
+  local bundle_id="$2"
+  local json_path
+  json_path="$(mktemp "/tmp/perf_device_apps.XXXXXX.json")"
+
+  if ! xcrun devicectl device info apps --device "$device_id" --bundle-id "$bundle_id" --json-output "$json_path" >/dev/null 2>&1; then
+    rm -f "$json_path"
+    return 2
+  fi
+
+  "$PYTHON_BIN" - "$json_path" "$bundle_id" <<'PY'
+import json
+import sys
+
+path, target = sys.argv[1], sys.argv[2]
+
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+except Exception:
+    sys.exit(2)
+
+
+def contains_bundle(value):
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            if str(key).lower().endswith("bundleidentifier") and str(inner).strip() == target:
+                return True
+            if contains_bundle(inner):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(contains_bundle(item) for item in value)
+    return str(value).strip() == target
+
+
+sys.exit(0 if contains_bundle(payload) else 1)
+PY
+  local status=$?
+  rm -f "$json_path"
+  return "$status"
+}
+
+ensure_target_app_available() {
+  local bundle_id="$1"
+
+  if [[ "$DESTINATION" == platform=iOS\ Simulator* ]]; then
+    boot_simulator_if_needed
+    if simulator_has_target_app "$SIM_UDID" "$bundle_id"; then
+      echo "✅ Target app is installed on simulator." | tee -a "$LOG_PATH"
+      return 0
+    fi
+
+    echo "❌ Target app '$bundle_id' is not installed on the selected simulator." | tee -a "$LOG_PATH"
+    echo "   PerfoMace launches the real app by bundle id; it does not install that app for you." | tee -a "$LOG_PATH"
+    echo "   Install the app on the simulator from Xcode first, then rerun." | tee -a "$LOG_PATH"
+    return 1
+  fi
+
+  if [ -n "${REAL_DEVICE_ID:-}" ]; then
+    device_has_target_app "$REAL_DEVICE_ID" "$bundle_id"
+    local status=$?
+    if [ "$status" -eq 0 ]; then
+      echo "✅ Target app is installed on the selected device." | tee -a "$LOG_PATH"
+      return 0
+    fi
+    if [ "$status" -eq 1 ]; then
+      echo "❌ Target app '$bundle_id' is not installed on the selected device." | tee -a "$LOG_PATH"
+      echo "   PerfoMace launches the real app by bundle id; it does not install that app for you." | tee -a "$LOG_PATH"
+      echo "   Install the app on the iPhone from Xcode first, then rerun." | tee -a "$LOG_PATH"
+      return 1
+    fi
+
+    echo "❌ Could not confirm whether '$bundle_id' is installed on device $REAL_DEVICE_ID." | tee -a "$LOG_PATH"
+    echo "   Unlock the device, trust this Mac, and let Xcode finish preparing it before rerunning." | tee -a "$LOG_PATH"
+    return 1
+  fi
+
+  return 0
+}
+
+detect_signing_failure_reason() {
+  [ -f "$LOG_PATH" ] || return 0
+
+  if grep -q "No Accounts: Add a new account in Accounts settings." "$LOG_PATH"; then
+    echo "missing_xcode_account"
+    return 0
+  fi
+
+  if grep -q "No profiles for '" "$LOG_PATH"; then
+    echo "missing_provisioning_profile"
+    return 0
+  fi
+
+  if grep -q "requires a development team" "$LOG_PATH"; then
+    echo "missing_development_team"
+    return 0
+  fi
+
+  if grep -q "Code signing is required for product type" "$LOG_PATH"; then
+    echo "code_signing_required"
+    return 0
+  fi
+}
+
+emit_signing_failure_guidance() {
+  local reason="$1"
+  [ -n "$reason" ] || return 0
+
+  case "$reason" in
+    missing_xcode_account)
+      echo "❌ Real-device build failed because this Mac has no Apple Developer account configured in Xcode." | tee -a "$LOG_PATH"
+      echo "   Open Xcode > Settings > Accounts and sign in, then rerun PerfoMace." | tee -a "$LOG_PATH"
+      ;;
+    missing_provisioning_profile)
+      echo "❌ Real-device build failed because the required provisioning profiles are missing for the PerfoMace app or UI test runner." | tee -a "$LOG_PATH"
+      echo "   Open the project in Xcode and choose a valid signing team/profile for both targets, then rerun." | tee -a "$LOG_PATH"
+      ;;
+    missing_development_team)
+      echo "❌ Real-device build failed because no development team is configured for signing." | tee -a "$LOG_PATH"
+      echo "   Choose a valid team in Xcode signing settings, then rerun." | tee -a "$LOG_PATH"
+      ;;
+    code_signing_required)
+      echo "❌ Real-device build failed because code signing is required for this destination." | tee -a "$LOG_PATH"
+      echo "   Configure signing in Xcode before rerunning on a physical device." | tee -a "$LOG_PATH"
+      ;;
+  esac
+}
 
 # Optional: reset simulator content before run
 if [ "${RESET_SIM:-0}" -eq 1 ] && [[ "$DESTINATION" == platform=iOS\ Simulator* ]]; then
@@ -492,41 +674,9 @@ cp "$SCRIPT_DIR/run_perf.sh" "$RESULTS_DIR/run_perf.snapshot.sh" >/dev/null 2>&1
 echo "ℹ️  Runner revision: $SCRIPT_REVISION" | tee -a "$LOG_PATH"
 echo "ℹ️  Using PERF_APP=${PERF_APP:-} PERF_APP_BUNDLE_ID=${PERF_APP_BUNDLE_ID}" | tee -a "$LOG_PATH"
 
-# Ensure XCTest gets the env (xcodebuild doesn't always pass shell env to tests)
-SCHEME_FILE="$PROJECT_ROOT/PerfoMace.xcodeproj/xcshareddata/xcschemes/PerfoMace.xcscheme"
-"$PYTHON_BIN" - "$SCHEME_FILE" "$PERF_APP" "$PERF_APP_BUNDLE_ID" "$PERF_EMAIL" "$PERF_PASSWORD" "$PERF_AD_BEHAVIOR" <<'PY'
-import sys
-import xml.etree.ElementTree as ET
-
-path, app_key, bundle_id, email, password, ad_behavior = sys.argv[1:7]
-tree = ET.parse(path)
-root = tree.getroot()
-
-def set_env(test_action):
-    envs = test_action.find("EnvironmentVariables")
-    if envs is None:
-        envs = ET.SubElement(test_action, "EnvironmentVariables")
-    desired = {
-        "PERF_APP": app_key,
-        "PERF_APP_BUNDLE_ID": bundle_id,
-        "PERF_EMAIL": email,
-        "PERF_PASSWORD": password,
-        "PERF_AD_BEHAVIOR": ad_behavior,
-    }
-    existing = {e.get("key"): e for e in envs.findall("EnvironmentVariable")}
-    for key, val in desired.items():
-        if key in existing:
-            existing[key].set("value", val or "")
-            existing[key].set("isEnabled", "YES")
-        else:
-            ET.SubElement(envs, "EnvironmentVariable", key=key, value=val or "", isEnabled="YES")
-
-test_action = root.find("TestAction")
-if test_action is not None:
-    set_env(test_action)
-
-tree.write(path, encoding="UTF-8", xml_declaration=True)
-PY
+if ! ensure_target_app_available "$PERF_APP_BUNDLE_ID"; then
+  exit 2
+fi
 
 # 3. CLEAN UP
 rm -rf "$RESULTS_DIR/Performance.xcresult"
@@ -704,10 +854,13 @@ fi
 
 build_for_testing_once() {
   local build_flavor="device"
+  local build_inputs_hash=""
+  local build_context=""
   if [[ "$DESTINATION" == platform=iOS\ Simulator* ]]; then
     build_flavor="simulator"
   fi
-  local expected_context="PERF_APP=${PERF_APP};BUNDLE_ID=${PERF_APP_BUNDLE_ID};DESTINATION_KIND=${build_flavor}"
+  build_inputs_hash="$(build_inputs_signature)"
+  build_context="SCRIPT_REVISION=${SCRIPT_REVISION};PERF_APP=${PERF_APP};BUNDLE_ID=${PERF_APP_BUNDLE_ID};DESTINATION_KIND=${build_flavor};XCODE_VERSION=$(xcode_version_signature);BUILD_INPUTS_HASH=${build_inputs_hash}"
   local runner_app=""
   local app_bundle=""
   local xctestrun_file=""
@@ -726,7 +879,7 @@ build_for_testing_once() {
 
   if [ "$REUSE_EXISTING_BUILD" -eq 1 ] &&
      [ -f "$BUILD_CONTEXT_FILE" ] &&
-     grep -Fxq "$expected_context" "$BUILD_CONTEXT_FILE" &&
+     grep -Fxq "$build_context" "$BUILD_CONTEXT_FILE" &&
      [ -d "$runner_app" ] &&
      [ -d "$app_bundle" ] &&
      [ -n "$xctestrun_file" ]; then
@@ -749,7 +902,7 @@ build_for_testing_once() {
     local build_status=${PIPESTATUS[0]}
     if [ "$build_status" -eq 0 ]; then
       mkdir -p "$DERIVED_DATA_DIR"
-      printf '%s\n' "$expected_context" > "$BUILD_CONTEXT_FILE"
+      printf '%s\n' "$build_context" > "$BUILD_CONTEXT_FILE"
     fi
     return "$build_status"
   elif [ "$TIMEOUT_SECS" -gt 0 ] && command -v gtimeout >/dev/null 2>&1; then
@@ -757,7 +910,7 @@ build_for_testing_once() {
     local build_status=${PIPESTATUS[0]}
     if [ "$build_status" -eq 0 ]; then
       mkdir -p "$DERIVED_DATA_DIR"
-      printf '%s\n' "$expected_context" > "$BUILD_CONTEXT_FILE"
+      printf '%s\n' "$build_context" > "$BUILD_CONTEXT_FILE"
     fi
     return "$build_status"
   else
@@ -765,7 +918,7 @@ build_for_testing_once() {
     local build_status=${PIPESTATUS[0]}
     if [ "$build_status" -eq 0 ]; then
       mkdir -p "$DERIVED_DATA_DIR"
-      printf '%s\n' "$expected_context" > "$BUILD_CONTEXT_FILE"
+      printf '%s\n' "$build_context" > "$BUILD_CONTEXT_FILE"
     fi
     return "$build_status"
   fi
@@ -861,7 +1014,7 @@ run_xcodebuild_iteration() {
   echo "🔁 Iteration ${iteration}/${total_iterations}" | tee -a "$LOG_PATH"
   echo "PERF_ITERATION iteration=${iteration} total=${total_iterations}" | tee -a "$LOG_PATH"
 
-  if [ "${STRICT_LOGGED_OUT_PREFLIGHT:-1}" -eq 1 ]; then
+  if [ "${STRICT_LOGGED_OUT_PREFLIGHT:-1}" -eq 1 ] && [ "${#PREP_TEST_ARGS[@]}" -gt 0 ]; then
     if ! run_xcodebuild_phase "$iteration" "$total_iterations" "preflight" "Preparing Fresh Logged-Out State" "${PREP_TEST_ARGS[@]}"; then
       iteration_exit=1
       echo "⚠️ Preflight state preparation failed for iteration ${iteration}/${total_iterations}. Skipping measured phases." | tee -a "$LOG_PATH"
@@ -869,20 +1022,27 @@ run_xcodebuild_iteration() {
     fi
   fi
 
-  if ! run_xcodebuild_phase "$iteration" "$total_iterations" "launch" "Running Launch Tests" "${LAUNCH_TEST_ARGS[@]}"; then
-    iteration_exit=1
-    echo "⚠️ Launch phase failed for iteration ${iteration}/${total_iterations}." | tee -a "$LOG_PATH"
+  if [ "${#LAUNCH_TEST_ARGS[@]}" -gt 0 ]; then
+    if ! run_xcodebuild_phase "$iteration" "$total_iterations" "launch" "Running Launch Tests" "${LAUNCH_TEST_ARGS[@]}"; then
+      iteration_exit=1
+      echo "⚠️ Launch phase failed for iteration ${iteration}/${total_iterations}." | tee -a "$LOG_PATH"
+    fi
   fi
 
-  if ! run_xcodebuild_phase "$iteration" "$total_iterations" "login" "Running Login Test" "${ACCOUNT_TEST_ARGS[@]}"; then
-    iteration_exit=1
-    echo "⚠️ Login phase failed for iteration ${iteration}/${total_iterations}. Skipping content phase." | tee -a "$LOG_PATH"
-  else
+  if [ "${#ACCOUNT_TEST_ARGS[@]}" -gt 0 ]; then
+    if ! run_xcodebuild_phase "$iteration" "$total_iterations" "login" "Running Login Test" "${ACCOUNT_TEST_ARGS[@]}"; then
+      iteration_exit=1
+      echo "⚠️ Login phase failed for iteration ${iteration}/${total_iterations}. Skipping content phase." | tee -a "$LOG_PATH"
+    else
+      login_phase_succeeded=1
+      LOGIN_SUCCEEDED_AT_LEAST_ONCE=1
+    fi
+  elif [ "${#CONTENT_TEST_ARGS[@]}" -gt 0 ]; then
     login_phase_succeeded=1
     LOGIN_SUCCEEDED_AT_LEAST_ONCE=1
   fi
 
-  if [ "$login_phase_succeeded" -eq 1 ]; then
+  if [ "${#CONTENT_TEST_ARGS[@]}" -gt 0 ] && [ "$login_phase_succeeded" -eq 1 ]; then
     if ! run_xcodebuild_phase "$iteration" "$total_iterations" "content" "Running Content Tests" "${CONTENT_TEST_ARGS[@]}"; then
       iteration_exit=1
       echo "⚠️ Content phase failed for iteration ${iteration}/${total_iterations}." | tee -a "$LOG_PATH"
@@ -898,10 +1058,16 @@ LAST_SUCCESSFUL_RESULT=""
 LAST_ITERATION_RESULT=""
 FINAL_LOGOUT_RESULT=""
 LOGIN_SUCCEEDED_AT_LEAST_ONCE=0
+BUILD_PREPARED=0
+BUILD_FAILURE_REASON=""
 
 if ! build_for_testing_once; then
   echo "❌ build-for-testing failed. Skipping test iterations." | tee -a "$LOG_PATH"
   XCODEBUILD_EXIT=1
+  BUILD_FAILURE_REASON="$(detect_signing_failure_reason || true)"
+  emit_signing_failure_guidance "$BUILD_FAILURE_REASON"
+else
+  BUILD_PREPARED=1
 fi
 
 if [ "$XCODEBUILD_EXIT" -eq 0 ]; then
@@ -938,7 +1104,17 @@ rm -rf \
 # 6. REQUIRED INSTRUMENTS PASS (Activity, CPU, Memory, Leaks, Network)
 if [ "${INSTRUMENTS:-0}" -eq 1 ]; then
   if [ "${XCODEBUILD_EXIT:-0}" -ne 0 ]; then
-    echo "⚠️ Tests failed, but continuing with standalone Instruments capture." | tee -a "$LOG_PATH"
+    if [ "${ALLOW_STANDALONE_INSTRUMENTS_AFTER_TEST_FAILURE:-0}" -eq 1 ]; then
+      echo "⚠️ Tests failed, but continuing with standalone Instruments capture because ALLOW_STANDALONE_INSTRUMENTS_AFTER_TEST_FAILURE=1." | tee -a "$LOG_PATH"
+    else
+      echo "ℹ️ Skipping standalone Instruments because the test build/run failed." | tee -a "$LOG_PATH"
+      if [ -n "$BUILD_FAILURE_REASON" ]; then
+        echo "   Fix the build/signing issue first, or rerun with ALLOW_STANDALONE_INSTRUMENTS_AFTER_TEST_FAILURE=1 to force trace collection." | tee -a "$LOG_PATH"
+      else
+        echo "   Rerun with ALLOW_STANDALONE_INSTRUMENTS_AFTER_TEST_FAILURE=1 if you explicitly want traces after a failed test pass." | tee -a "$LOG_PATH"
+      fi
+      INSTRUMENTS=0
+    fi
   fi
 fi
 
@@ -1472,7 +1648,7 @@ PY
   fi
 fi
 
-if [ "$LOGIN_SUCCEEDED_AT_LEAST_ONCE" -eq 1 ]; then
+if [ "$BUILD_PREPARED" -eq 1 ] && [ "${#LOGOUT_TEST_ARGS[@]}" -gt 0 ]; then
   FINAL_LOGOUT_RESULT="$RESULTS_DIR/iterations/iteration_${TEST_ITERATIONS}_final_logout.xcresult"
   if ! run_xcodebuild_phase "$TEST_ITERATIONS" "$TEST_ITERATIONS" "final_logout" "Running Final Logout Test" "${LOGOUT_TEST_ARGS[@]}"; then
     XCODEBUILD_EXIT=1

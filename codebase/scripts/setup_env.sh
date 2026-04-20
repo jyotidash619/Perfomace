@@ -130,6 +130,70 @@ prepare_results_dirs() {
   setup_ok "Results folders are ready."
 }
 
+check_python3() {
+  if command -v python3 >/dev/null 2>&1; then
+    setup_ok "Python 3 is available."
+    return 0
+  fi
+
+  setup_fail "python3 is missing. Install Python 3 or Xcode Command Line Tools before running PerfoMace."
+  return 1
+}
+
+check_ios_targets() {
+  local status
+  status="$(
+    python3 - <<'PY' 2>/dev/null
+import json
+import subprocess
+
+try:
+    result = subprocess.run(
+        ["xcrun", "xcdevice", "list"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=20,
+    )
+    devices = json.loads(result.stdout)
+except Exception:
+    print("error")
+    raise SystemExit(0)
+
+simulators = 0
+real_devices = 0
+for device in devices:
+    if device.get("ignored") or device.get("available") is False:
+        continue
+    platform = str(device.get("platform") or "")
+    if device.get("simulator") and "iphonesimulator" in platform:
+        simulators += 1
+    elif not device.get("simulator") and "iphoneos" in platform:
+        real_devices += 1
+
+print(f"{simulators}:{real_devices}")
+PY
+  )"
+
+  case "$status" in
+    error|"")
+      setup_warn "Could not inspect simulator/device availability. PerfoMace will re-check this at run time."
+      return 0
+      ;;
+    *:*)
+      local simulators="${status%%:*}"
+      local real_devices="${status##*:}"
+      if [ "${simulators:-0}" -gt 0 ] || [ "${real_devices:-0}" -gt 0 ]; then
+        setup_ok "Found usable iOS targets (simulators: ${simulators:-0}, real devices: ${real_devices:-0})."
+        return 0
+      fi
+      setup_fail "No usable iOS simulator runtime or connected iPhone was found. Install a simulator runtime in Xcode or connect a prepared device."
+      return 1
+      ;;
+  esac
+}
+
 echo "🩺 Running PerfoMace setup check..."
 
 if ! command -v xcode-select >/dev/null 2>&1; then
@@ -142,6 +206,8 @@ repair_tmpdir || true
 ensure_xcode_developer_dir || true
 check_swift_toolchain || true
 check_xcodebuild || true
+check_python3 || true
+check_ios_targets || true
 prepare_results_dirs
 
 if [ "$SETUP_FAILED" -ne 0 ]; then

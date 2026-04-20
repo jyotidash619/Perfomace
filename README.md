@@ -101,11 +101,16 @@ The ready check validates:
 - Xcode developer directory
 - `xcrun swiftc --version`
 - `xcodebuild`
+- `python3`
+- at least one usable iOS target
 - results folder readiness
 
 Success output:
 
 - `PerfoMace setup check complete. Ready to go.`
+
+PerfoMace also validates that the selected QA or Legacy app is already installed on the chosen simulator or iPhone before starting the full run.
+On a physical iPhone, if Xcode has no signed-in Apple account or no provisioning profile for the PerfoMace app / UI test runner, PerfoMace now stops after the build failure with a direct signing message and skips standalone Instruments noise by default.
 
 ## Running From Terminal
 
@@ -177,6 +182,13 @@ xcodebuild -runFirstLaunch
 - connect and unlock the iPhone
 - tap `Trust` if prompted
 - enable Developer Mode
+
+### If a real-device run fails with `No Accounts` or missing profiles
+
+- sign in under `Xcode > Settings > Accounts`
+- choose a valid signing team/profile for both the app target and UI test runner
+- let Xcode finish preparing the device
+- rerun PerfoMace
 
 ### If no simulator destination is found
 

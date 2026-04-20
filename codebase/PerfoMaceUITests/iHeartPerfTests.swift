@@ -171,9 +171,52 @@ class iHeartPerfTests: XCTestCase {
     // MARK: - 3. SEARCH PERFORMANCE
     func testSearchSpeed() {
         ensureLoggedIn()
-        _ = measureMetricsOnce("Search") {
-            runSearchPlaybackFlow(query: "Taylor Swift")
+        let query = "Taylor Swift"
+        let options = XCTMeasureOptions()
+        options.iterationCount = 1
+        options.invocationOptions = [.manuallyStart, .manuallyStop]
+
+        var duration: TimeInterval = 0
+        emitScenarioEvent(name: "Search", state: "started")
+        defer { emitScenarioEvent(name: "Search", state: "finished") }
+
+        measure(metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric(), XCTStorageMetric()], options: options) {
+            var didStartMeasuring = false
+            defer {
+                if didStartMeasuring {
+                    stopMeasuring()
+                }
+            }
+
+            returnToRootIfNeeded()
+            dismissAdsIfPresent(reason: "beforeSearchPerformance")
+            prepareSearchQuery(query)
+
+            // Measure the actual search request and result readiness, not the tab navigation or typing.
+            startMeasuring()
+            didStartMeasuring = true
+            let start = CFAbsoluteTimeGetCurrent()
+            submitSearchQuery()
+            dismissAdsIfPresent(reason: "beforeSearchResults")
+            guard waitForSearchResults(query: query, timeout: isLegacyRun ? 8 : 10) else {
+                dumpAccessibilityTree("SearchResultsMissing")
+                XCTFail("Search results not found.")
+                return
+            }
+            duration = CFAbsoluteTimeGetCurrent() - start
+            stopMeasuring()
+            didStartMeasuring = false
+
+            guard openFirstSearchResult(query: query) else {
+                dumpAccessibilityTree("SearchResultMissing")
+                XCTFail("Search result target not found.")
+                return
+            }
+
+            assertPlaybackStarted(context: "SearchPlaybackNotStarted")
         }
+
+        emitPerfMetric(name: "Search", duration: duration)
     }
 
     // MARK: - 4. RADIO PLAY START
@@ -300,7 +343,11 @@ class iHeartPerfTests: XCTestCase {
         }
         _ = measureMetricsOnce("PodcastPlayStart") {
             episodeTarget.forceTap()
-            assertPodcastDetailLoaded(context: "PodcastDetailNotLoaded")
+            guard waitForPodcastDetailLoaded(timeout: isLegacyRun ? 10 : 8) else {
+                dumpAccessibilityTree("PodcastDetailNotLoaded")
+                XCTFail("Podcast detail did not load.")
+                return
+            }
             assertPlaybackStarted(context: "PodcastPlaybackNotStarted")
         }
     }
@@ -322,9 +369,10 @@ class iHeartPerfTests: XCTestCase {
         
         _ = measureMetricsOnce("PlaylistPlayStart") {
             playlistTarget.forceTap()
-            if !waitForPlaylistDetail(timeout: isLegacyRun ? 8 : 6) {
+            guard waitForPlaylistDetail(timeout: isLegacyRun ? 8 : 6) else {
                 dumpAccessibilityTree("PlaylistDetailNotLoaded")
                 XCTFail("Playlist detail did not load.")
+                return
             }
             assertPlaybackStarted(context: "PlaylistPlaybackNotStarted")
         }
@@ -649,12 +697,8 @@ class iHeartPerfTests: XCTestCase {
     
     // MARK: - Element helpers
 
-    private func loggedInShellVisible() -> Bool {
-        if homeSurfaceVisible() {
-            return true
-        }
-
-        let indicators = [
+    private func loggedInShellIndicators() -> [XCUIElement] {
+        [
             app.tabBars.firstMatch,
             app.tabBars.buttons[UI.homeTab],
             app.tabBars.buttons["homeTab"],
@@ -677,10 +721,14 @@ class iHeartPerfTests: XCTestCase {
             app.navigationBars["iHeartRadio.YourLibraryView"],
             app.collectionViews["YourLibraryViewController-CollectionView-UICollectionView"],
         ]
+    }
 
-        return indicators.contains(where: { indicator in
-            indicator.exists || indicator.waitForExistence(timeout: 0.2)
-        })
+    private func loggedInShellVisible() -> Bool {
+        if homeSurfaceVisible() {
+            return true
+        }
+
+        return loggedInShellIndicators().contains(where: { $0.exists })
     }
 
     private func waitForInitialAppSurface(timeout: TimeInterval) {
@@ -692,6 +740,9 @@ class iHeartPerfTests: XCTestCase {
             if fakeSplashVisible() {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.3))
                 continue
+            }
+            if loggedInShellIndicators().contains(where: { $0.waitForExistence(timeout: 0.1) }) {
+                return
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         } while Date() < deadline
@@ -992,18 +1043,29 @@ class iHeartPerfTests: XCTestCase {
     }
 
     private func dismissSearchOverlayIfPresent() {
+        let keyboard = app.keyboards.firstMatch
+        let activeSearchIndicators = [
+            app.textFields["SearchBarActiveView-TextField"],
+            app.searchFields.firstMatch,
+            app.buttons["SearchBarActiveView-Cancel-Button"],
+        ]
+        let shouldProbeCancelButtons = keyboard.exists
+            || activeSearchIndicators.contains(where: { $0.exists && !$0.frame.isEmpty })
+
+        guard shouldProbeCancelButtons else { return }
+
         let cancelCandidates = [
             app.buttons["SearchBarActiveView-Cancel-Button"],
             app.buttons["Cancel"],
         ]
-        for candidate in cancelCandidates where candidate.waitForExistence(timeout: 0.5) {
+        for candidate in cancelCandidates where candidate.exists || candidate.waitForExistence(timeout: 0.15) {
             candidate.forceTap()
             RunLoop.current.run(until: Date().addingTimeInterval(0.4))
             return
         }
 
-        if app.keyboards.firstMatch.exists {
-            let searchKey = app.keyboards.buttons["Search"]
+        if keyboard.exists {
+            let searchKey = keyboard.buttons["Search"]
             if searchKey.exists {
                 searchKey.tap()
                 RunLoop.current.run(until: Date().addingTimeInterval(0.3))
@@ -1048,13 +1110,17 @@ class iHeartPerfTests: XCTestCase {
     }
 
     private func ensureHomeTabSelectedForLogout() -> Bool {
+        if homeSurfaceVisible() {
+            return true
+        }
+
         for attempt in 0..<4 {
             unwindToTabRootForLogout()
             dismissSearchOverlayIfPresent()
             dismissKeyboardIfPresent()
             clearInterferingPrompts(reason: "ensureHomeTabSelectedForLogout", timeout: 0.4)
 
-            if waitForHomeSurface(timeout: 0.8) {
+            if homeSurfaceVisible() || waitForHomeSurface(timeout: 0.8) {
                 return true
             }
 
@@ -1074,20 +1140,26 @@ class iHeartPerfTests: XCTestCase {
     }
 
     private func tapHomeTabForLogout() -> Bool {
+        if homeSurfaceVisible() {
+            return true
+        }
+
         let homeCandidates = homeTabCandidates()
 
         for candidate in homeCandidates where candidate.exists && !candidate.frame.isEmpty {
             candidate.forceTap()
             RunLoop.current.run(until: Date().addingTimeInterval(0.45))
-            if waitForHomeSurface(timeout: 0.8) {
+            if waitForHomeSurface(timeout: isLegacyRun ? 0.8 : 0.45) {
                 return true
             }
 
-            // Re-tap Home deliberately: many tab-based apps pop to root on a second tap.
-            candidate.forceTap()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.45))
-            if waitForHomeSurface(timeout: 1.0) {
-                return true
+            if isLegacyRun {
+                // Legacy often needs a second tap to pop to the tab root.
+                candidate.forceTap()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.45))
+                if waitForHomeSurface(timeout: 1.0) {
+                    return true
+                }
             }
         }
 
@@ -1136,18 +1208,27 @@ class iHeartPerfTests: XCTestCase {
             return hasTopSettings && hasHomeContent && (homeSelected || !anyHomeTabVisible)
         }
 
-        let qaIndicators = [
+        let qaTopSettings = [
             app.buttons[UI.settingsIcon],
             app.navigationBars.buttons[UI.settingsIcon],
+        ]
+        let qaHomeContent = [
             app.staticTexts["Presets"],
+            app.buttons["Presets"],
             app.staticTexts["Live Radio Dial"],
             app.staticTexts["Recently Played"],
             app.staticTexts["Your Library"],
+            app.staticTexts["Scan Stations"],
             app.buttons["Scan Stations"],
         ]
-        let hasTopSettings = qaIndicators.prefix(2).contains(where: { $0.exists && !$0.frame.isEmpty && $0.frame.maxY < 180 })
-        let hasHomeContent = qaIndicators.dropFirst(2).contains(where: { $0.exists })
-        return hasTopSettings && hasHomeContent && (homeSelected || !anyHomeTabVisible)
+        let hasTopSettings = qaTopSettings.contains(where: { $0.exists && !$0.frame.isEmpty && $0.frame.maxY < 180 })
+        let hasHomeContent = qaHomeContent.contains(where: { $0.exists && !$0.frame.isEmpty })
+        let semanticHomeTabVisible = homeCandidates.contains(where: {
+            $0.exists
+                && !$0.frame.isEmpty
+                && ($0.identifier == "homeTab" || $0.identifier == "tab_yourHome" || $0.label.caseInsensitiveCompare(UI.homeTab) == .orderedSame)
+        })
+        return hasTopSettings && hasHomeContent && (homeSelected || semanticHomeTabVisible || !anyHomeTabVisible)
     }
 
     private func waitForHomeSurface(timeout: TimeInterval) -> Bool {
@@ -1183,6 +1264,10 @@ class iHeartPerfTests: XCTestCase {
     }
 
     private func waitForSelectedTab(label: String, identifier: String, timeout: TimeInterval) -> Bool {
+        if (label == UI.homeTab || identifier == "homeTab") && homeSurfaceVisible() {
+            return true
+        }
+
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
             let candidates = [
@@ -1193,6 +1278,9 @@ class iHeartPerfTests: XCTestCase {
             if candidates.contains(where: { $0.exists && $0.isSelected }) {
                 return true
             }
+            if (label == UI.homeTab || identifier == "homeTab") && homeSurfaceVisible() {
+                return true
+            }
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         } while Date() < deadline
         return false
@@ -1200,6 +1288,9 @@ class iHeartPerfTests: XCTestCase {
     
     private func selectTab(label: String, identifier: String) {
         dismissAdsIfPresent(reason: "selectTab")
+        if (label == UI.homeTab || identifier == "homeTab") && homeSurfaceVisible() {
+            return
+        }
         let byLabel = app.tabBars.buttons[label]
         if byLabel.waitForExistence(timeout: 3) {
             if !byLabel.isSelected {
@@ -1605,10 +1696,29 @@ class iHeartPerfTests: XCTestCase {
             : app.frame
         let navBottom = app.navigationBars.firstMatch.exists ? app.navigationBars.firstMatch.frame.maxY : 90
         let tabTop = app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame.minY : window.maxY
-        let miniPlayerTop = app.buttons["MiniPlayer-Container"].exists ? app.buttons["MiniPlayer-Container"].frame.minY : window.maxY
+        let miniPlayerTop = miniPlayerTopBoundary() ?? window.maxY
         let top = max(120, navBottom)
         let bottom = min(tabTop, miniPlayerTop)
         return CGRect(x: window.minX, y: top, width: window.width, height: max(0, bottom - top))
+    }
+
+    private func visibleMiniPlayerContainers() -> [XCUIElement] {
+        app.buttons.matching(identifier: "MiniPlayer-Container").allElementsBoundByIndex.filter {
+            $0.exists && !$0.frame.isEmpty
+        }
+    }
+
+    private func miniPlayerContainerElement() -> XCUIElement {
+        visibleMiniPlayerContainers().first ?? app.buttons.matching(identifier: "MiniPlayer-Container").firstMatch
+    }
+
+    private func hasVisibleMiniPlayerContainer() -> Bool {
+        !visibleMiniPlayerContainers().isEmpty
+    }
+
+    private func miniPlayerTopBoundary() -> CGFloat? {
+        let candidates = visibleMiniPlayerContainers().map(\.frame.minY)
+        return candidates.min()
     }
 
     private func visibleContentElements(_ elements: [XCUIElement], preferLowerHalf: Bool = false) -> [XCUIElement] {
@@ -1790,6 +1900,9 @@ class iHeartPerfTests: XCTestCase {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
             if !isContentLoadingVisible() {
+                if !isLegacyRun, preferredQAPlaylistCardTarget() != nil {
+                    return true
+                }
                 for query in playlistCardQueries() {
                     if !visibleContentElements(limitedElements(in: query, limit: 40)).isEmpty {
                         return true
@@ -1807,9 +1920,33 @@ class iHeartPerfTests: XCTestCase {
         return false
     }
 
+    private func preferredQAPlaylistCardTarget() -> XCUIElement? {
+        guard !isLegacyRun else { return nil }
+
+        let preferredPredicates = [
+            NSPredicate(format: "identifier BEGINSWITH[c] 'recommendedForYouSection-CarouselCard-Index'"),
+            NSPredicate(format: "identifier BEGINSWITH[c] 'featuredPlaylistSection-CarouselCard-Index'"),
+            NSPredicate(format: "identifier BEGINSWITH[c] 'moodsAndActivitiesSection-CarouselCard-Index'"),
+            NSPredicate(format: "identifier BEGINSWITH[c] 'decadesSection-CarouselCard-Index'"),
+        ]
+
+        for predicate in preferredPredicates {
+            let query = app.buttons.matching(predicate)
+            let candidates = visibleContentElements(limitedElements(in: query, limit: 8))
+            if let target = candidates.first(where: isValidPlaylistCardTarget(_:)) {
+                return target
+            }
+        }
+
+        return nil
+    }
+
     private func firstPlaylistCardTarget() -> XCUIElement? {
         guard waitForPlaylistContentReady(timeout: isLegacyRun ? 12 : 20) else {
             return nil
+        }
+        if let preferredTarget = preferredQAPlaylistCardTarget() {
+            return preferredTarget
         }
         for query in playlistCardQueries() {
             let visibleTargets = visibleContentElements(limitedElements(in: query, limit: 40))
@@ -1866,8 +2003,11 @@ class iHeartPerfTests: XCTestCase {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
             if !isContentLoadingVisible() {
+                if !isLegacyRun, preferredQAPodcastEpisodeTarget() != nil {
+                    return true
+                }
                 for query in podcastEpisodeQueries() {
-                    if !visibleContentElements(query.allElementsBoundByIndex, preferLowerHalf: true).isEmpty {
+                    if !visibleContentElements(limitedElements(in: query, limit: 40), preferLowerHalf: true).isEmpty {
                         return true
                     }
                 }
@@ -1876,11 +2016,36 @@ class iHeartPerfTests: XCTestCase {
         } while Date() < deadline
 
         for query in podcastEpisodeQueries() {
-            if !visibleContentElements(query.allElementsBoundByIndex, preferLowerHalf: true).isEmpty {
+            if !visibleContentElements(limitedElements(in: query, limit: 40), preferLowerHalf: true).isEmpty {
                 return true
             }
         }
         return false
+    }
+
+    private func preferredQAPodcastEpisodeTarget() -> XCUIElement? {
+        guard !isLegacyRun else { return nil }
+
+        let preferredPredicates = [
+            NSPredicate(format: "identifier ==[c] 'PodcastContentTabView-ContinueListening-CardItem'"),
+            NSPredicate(format: "identifier BEGINSWITH[c] 'recommendedPodcastsSection-CarouselCard-Index'"),
+            NSPredicate(format: "identifier BEGINSWITH[c] 'popularPodcastsSection-CarouselCard-Index'"),
+        ]
+
+        for predicate in preferredPredicates {
+            let query = app.buttons.matching(predicate)
+            let candidates = visibleContentElements(limitedElements(in: query, limit: 8), preferLowerHalf: true)
+                .filter { candidate in
+                    let identifier = candidate.identifier.lowercased()
+                    let label = candidate.label.lowercased()
+                    return !identifier.contains("miniplayer") && !label.contains("mini player")
+                }
+            if let target = candidates.first {
+                return target
+            }
+        }
+
+        return nil
     }
 
     private func firstPodcastEpisodeTarget() -> XCUIElement? {
@@ -1930,8 +2095,12 @@ class iHeartPerfTests: XCTestCase {
                 || label == "listen"
         }
 
+        if let preferredTarget = preferredQAPodcastEpisodeTarget(), validPodcastTarget(preferredTarget) {
+            return preferredTarget
+        }
+
         for query in podcastEpisodeQueries() {
-            let candidates = visibleContentElements(query.allElementsBoundByIndex, preferLowerHalf: true)
+            let candidates = visibleContentElements(limitedElements(in: query, limit: 40), preferLowerHalf: true)
                 .filter(validPodcastTarget)
             if let target = candidates.first {
                 return target
@@ -2097,9 +2266,16 @@ class iHeartPerfTests: XCTestCase {
         return false
     }
 
-    private func isInlineAPIErrorVisible() -> Bool {
+    private func currentInlineAPIErrorMessage() -> String? {
         let errorPredicate = NSPredicate(format: "label CONTAINS[c] 'API Error' OR label CONTAINS[c] '404' OR label CONTAINS[c] 'timeout'")
-        return app.staticTexts.matching(errorPredicate).firstMatch.exists
+        let visibleText = app.staticTexts.matching(errorPredicate).allElementsBoundByIndex.first {
+            $0.exists && !$0.label.isEmpty
+        }
+        return visibleText?.label
+    }
+
+    private func isInlineAPIErrorVisible() -> Bool {
+        currentInlineAPIErrorMessage() != nil
     }
 
     private func dismissInlineAPIErrorIfPossible() {
@@ -2136,7 +2312,7 @@ class iHeartPerfTests: XCTestCase {
                     app.buttons["Podcast-Share-NavBar-Button"].exists ||
                     app.buttons["More-NavBar-Button"].exists
                 )
-            let hasPlaybackSurface = app.buttons["MiniPlayer-Container"].exists &&
+            let hasPlaybackSurface = hasVisibleMiniPlayerContainer() &&
                 (
                     app.buttons["MiniPlayer-Play-Button"].exists ||
                     app.buttons["MiniPlayer-Pause-Button"].exists ||
@@ -2184,7 +2360,7 @@ class iHeartPerfTests: XCTestCase {
             app.buttons["Shuffle Play"],
             app.buttons["ProfileHeader-shareButton"],
             app.buttons["ProfileHeader-overflowButton"],
-            app.buttons["MiniPlayer-Container"],
+            miniPlayerContainerElement(),
             app.collectionViews.firstMatch,
             app.tables.firstMatch,
             app.staticTexts["Songs"],
@@ -2371,7 +2547,7 @@ class iHeartPerfTests: XCTestCase {
             let hasLoadedProfile = app.buttons["ProfileHeader-backButton"].exists &&
                 app.otherElements["ProfileHeaderView"].exists &&
                 (contentTabSwitcher.frame.height > 10 || app.buttons["ProfileHeaderView-Play-Button"].exists)
-            let hasPlaybackSurface = app.buttons["MiniPlayer-Container"].exists &&
+            let hasPlaybackSurface = hasVisibleMiniPlayerContainer() &&
                 (
                     app.buttons["MiniPlayer-Play-Button"].exists ||
                     app.buttons["MiniPlayer-Pause-Button"].exists ||
@@ -2405,7 +2581,7 @@ class iHeartPerfTests: XCTestCase {
             app.buttons["NewPlayButton-Play-UIButton"],
             app.buttons["NowPlaying-Pause-Button"],
             app.buttons["MiniPlayer-Pause-Button"],
-            app.buttons["MiniPlayer-Container"],
+            miniPlayerContainerElement(),
             app.staticTexts["Episodes"],
             app.staticTexts["Podcast"],
             app.otherElements["PodcastProfileHeaderView"],
@@ -2774,6 +2950,63 @@ class iHeartPerfTests: XCTestCase {
         return isLegacyRun ? legacyIndicators + genericIndicators : genericIndicators + legacyIndicators
     }
 
+    private func playbackProgressIndicators() -> [XCUIElement] {
+        let genericProgressPredicate = NSPredicate(
+            format: "identifier CONTAINS[c] 'ProgressBar' OR label CONTAINS[c] 'Playback position' OR label CONTAINS[c] 'Miniplayer: Playback position'"
+        )
+        return [
+            app.otherElements["MiniPlayerView-ProgressBar-UIView"],
+            app.otherElements.matching(genericProgressPredicate).firstMatch,
+            app.progressIndicators.matching(genericProgressPredicate).firstMatch,
+            app.sliders.matching(genericProgressPredicate).firstMatch,
+        ]
+    }
+
+    private func currentPlaybackProgressSnapshot() -> String? {
+        for indicator in playbackProgressIndicators() where indicator.exists && !indicator.frame.isEmpty {
+            let value = (indicator.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let value, !value.isEmpty {
+                return value
+            }
+            let label = indicator.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !label.isEmpty {
+                return label
+            }
+        }
+        return nil
+    }
+
+    private func visiblePlaybackEntryControlSummary() -> String? {
+        let candidateGroups: [(String, [XCUIElement])] = [
+            ("listen button", [
+                preferredLegacyListenButton(),
+                app.buttons["Listen"],
+                app.buttons.matching(NSPredicate(format: "label ==[c] 'Listen' OR identifier CONTAINS[c] 'listen'")).firstMatch,
+            ].compactMap { $0 }),
+            ("play button", [
+                preferredLegacyPlayButton(),
+                preferredPlayButton(),
+                preferredPlaylistPlayButton(),
+                app.buttons["Play"],
+                app.buttons["Shuffle Play"],
+                app.buttons["NewPlayButton-Play-UIButton"],
+                app.buttons["PlayerView-PlayButton-UIButton"],
+                app.buttons["MiniPlayer-Play-Button"],
+                app.buttons["NowPlaying-Play-Button"],
+                app.buttons.matching(NSPredicate(format: "identifier CONTAINS[c] 'play' OR label ==[c] 'Play' OR label CONTAINS[c] 'Play'")).firstMatch,
+            ].compactMap { $0 }),
+        ]
+
+        for (kind, candidates) in candidateGroups {
+            if let candidate = candidates.first(where: { $0.exists && !$0.frame.isEmpty }) {
+                let identifier = candidate.identifier.isEmpty ? "<no-id>" : candidate.identifier
+                let label = candidate.label.isEmpty ? "<no-label>" : candidate.label
+                return "\(kind) still visible (\(identifier) / \(label))"
+            }
+        }
+        return nil
+    }
+
     private func waitForAnyPlaybackIndicator(timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
@@ -2785,11 +3018,21 @@ class iHeartPerfTests: XCTestCase {
         return false
     }
 
-    private func waitForPlaybackStarted(timeout: TimeInterval) -> Bool {
+    private func waitForPlaybackStarted(timeout: TimeInterval, baselineProgressSnapshot: String? = nil) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
             if playbackStartedIndicators().contains(where: { $0.exists }) {
                 return true
+            }
+            let currentProgress = currentPlaybackProgressSnapshot()
+            if baselineProgressSnapshot == nil, currentProgress != nil {
+                return true
+            }
+            if let currentProgress, let baselineProgressSnapshot, currentProgress != baselineProgressSnapshot {
+                return true
+            }
+            if currentAppErrorMessage() != nil || currentInlineAPIErrorMessage() != nil {
+                return false
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         } while Date() < deadline
@@ -3013,13 +3256,35 @@ class iHeartPerfTests: XCTestCase {
     }
 
     private func assertPlaybackStarted(context: String) {
-        startPlaybackIfNeeded(context: context)
         let timeout: TimeInterval = isLegacyRun ? 16 : 10
-        if waitForPlaybackStarted(timeout: timeout) {
+        let baselineProgressSnapshot = currentPlaybackProgressSnapshot()
+        startPlaybackIfNeeded(context: context)
+        if waitForPlaybackStarted(timeout: timeout, baselineProgressSnapshot: baselineProgressSnapshot) {
             return
         }
+        var failureParts: [String] = []
+        if let appError = currentAppErrorMessage() {
+            failureParts.append("App error visible: \(appError)")
+        }
+        if let inlineError = currentInlineAPIErrorMessage() {
+            failureParts.append("Inline error visible: \(inlineError)")
+        }
+        if let progressSnapshot = currentPlaybackProgressSnapshot() {
+            if let baselineProgressSnapshot, baselineProgressSnapshot == progressSnapshot {
+                failureParts.append("Playback progress remained at '\(progressSnapshot)'")
+            } else {
+                failureParts.append("Playback surface visible with progress '\(progressSnapshot)'")
+            }
+        }
+        if let controlSummary = visiblePlaybackEntryControlSummary() {
+            failureParts.append(controlSummary)
+        }
         dumpAccessibilityTree(context)
-        XCTFail("Playback did not start.")
+        if failureParts.isEmpty {
+            XCTFail("Playback did not start.")
+        } else {
+            XCTFail("Playback did not start. " + failureParts.joined(separator: ". "))
+        }
     }
 
     @discardableResult

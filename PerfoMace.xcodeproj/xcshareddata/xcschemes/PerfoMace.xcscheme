@@ -29,33 +29,6 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
       shouldAutocreateTestPlan = "YES">
-      <EnvironmentVariables>
-         <EnvironmentVariable
-            key = "PERF_APP_BUNDLE_ID"
-            value = "com.clearchannel.iheartradio.legacy.qa"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "PERF_EMAIL"
-            value = "testjp100@test.com"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "PERF_PASSWORD"
-            value = "Test1234"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "PERF_AD_BEHAVIOR"
-            value = "bypass"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "PERF_APP"
-            value = "legacy"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-      </EnvironmentVariables>
       <Testables>
          <TestableReference
             skipped = "NO"
