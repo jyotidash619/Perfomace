@@ -256,8 +256,10 @@ def _format_metric_value(name, value):
     value = float(value)
     if "memory" in metric or " mem" in metric or "bytes" in metric or "disk " in metric:
         return _bytes_to_human(value)
-    if metric in {"sample time", "cpu time"} and abs(value) >= 1_000_000:
-        return f"{value / 1_000_000_000:.2f} s"
+    if metric in {"sample time", "cpu time"}:
+        if abs(value) >= 1_000_000:
+            return f"{value / 1_000_000_000:.2f} s"
+        return f"{value:.2f} s"
     if "request time (ms)" in metric:
         return f"{value:.1f} ms"
     if "request time (s)" in metric:
@@ -269,10 +271,22 @@ def _format_metric_value(name, value):
     return _format_number(value, 2)
 
 
-def _percent_diff(qa_value, legacy_value):
-    if qa_value in (None, 0) or legacy_value is None:
+def _chart_numeric_value(name, value):
+    if value is None:
         return None
-    return ((float(legacy_value) - float(qa_value)) / float(qa_value)) * 100.0
+    metric = (name or "").lower()
+    value = float(value)
+    if "memory" in metric or " mem" in metric or "bytes" in metric or "disk " in metric:
+        return value / (1024.0 * 1024.0)
+    if metric in {"sample time", "cpu time"} and abs(value) >= 1_000_000:
+        return value / 1_000_000_000.0
+    return value
+
+
+def _percent_diff(qa_value, legacy_value):
+    if legacy_value in (None, 0) or qa_value is None:
+        return None
+    return ((float(legacy_value) - float(qa_value)) / float(legacy_value)) * 100.0
 
 
 def _build_grouped_bar_rows(metrics, qa_values, legacy_values, formatter, row_height=30):
@@ -305,6 +319,136 @@ def _build_grouped_bar_rows(metrics, qa_values, legacy_values, formatter, row_he
     return f"<svg viewBox='0 0 {width} {height}' class='chart grouped-chart'>{''.join(rows)}</svg>"
 
 
+def _build_vertical_grouped_chart(metrics, qa_values, legacy_values, formatter, chart_id, qa_label="Re-Write", legacy_label="Legacy"):
+    if not metrics:
+        return "<div class='muted'>No bars available for this comparison.</div>"
+    width = max(720, 120 + (len(metrics) * 110))
+    height = 330
+    left = 54
+    right = 22
+    top = 16
+    bottom = 108
+    chart_height = height - top - bottom
+    chart_width = width - left - right
+    max_value = max(
+        [v for v in list(qa_values.values()) + list(legacy_values.values()) if v is not None] or [1.0]
+    )
+    column_width = chart_width / max(len(metrics), 1)
+    bar_width = min(30, (column_width - 18) / 2)
+    rows = [
+        f"<line x1='{left}' y1='{top + chart_height}' x2='{left + chart_width}' y2='{top + chart_height}' class='baseline'/>"
+    ]
+    for index, name in enumerate(metrics):
+        group_left = left + (index * column_width)
+        qa_value = qa_values.get(name)
+        legacy_value = legacy_values.get(name)
+        qa_height = 0 if qa_value is None else (float(qa_value) / max_value) * chart_height
+        legacy_height = 0 if legacy_value is None else (float(legacy_value) / max_value) * chart_height
+        qa_x = group_left + 16
+        legacy_x = qa_x + bar_width + 8
+        qa_y = top + chart_height - qa_height
+        legacy_y = top + chart_height - legacy_height
+        rows.append(f"<rect x='{qa_x:.1f}' y='{qa_y:.1f}' width='{bar_width:.1f}' height='{max(qa_height, 2):.1f}' rx='8' class='bar-qa'/>")
+        rows.append(f"<rect x='{legacy_x:.1f}' y='{legacy_y:.1f}' width='{bar_width:.1f}' height='{max(legacy_height, 2):.1f}' rx='8' class='bar-legacy'/>")
+        rows.append(f"<text x='{qa_x + (bar_width / 2):.1f}' y='{max(14, qa_y - 6):.1f}' text-anchor='middle' class='bar-value'>{_escape(formatter(qa_value))}</text>")
+        rows.append(f"<text x='{legacy_x + (bar_width / 2):.1f}' y='{max(14, legacy_y - 6):.1f}' text-anchor='middle' class='bar-value'>{_escape(formatter(legacy_value))}</text>")
+        label_x = group_left + (column_width / 2)
+        label_y = top + chart_height + 16
+        rows.append(
+            f"<text x='{label_x:.1f}' y='{label_y:.1f}' transform='rotate(-38 {label_x:.1f} {label_y:.1f})' text-anchor='end' class='bar-label'>{_escape(name)}</text>"
+        )
+    rows.append(
+        "<g>"
+        f"<rect x='{left}' y='{height - 32}' width='14' height='10' rx='5' class='bar-legacy'/>"
+        f"<text x='{left + 20}' y='{height - 23}' class='legend-text'>{_escape(legacy_label)}</text>"
+        f"<rect x='{left + 110}' y='{height - 32}' width='14' height='10' rx='5' class='bar-qa'/>"
+        f"<text x='{left + 130}' y='{height - 23}' class='legend-text'>{_escape(qa_label)}</text>"
+        "</g>"
+    )
+    return f"<svg id='{_escape(chart_id)}' viewBox='0 0 {width} {height}' class='chart vertical-chart'>{''.join(rows)}</svg>"
+
+
+def _pick_trace_dashboard_metrics(trace_metrics, qa_trace, legacy_trace, limit=6):
+    preferred_names = [
+        "CPU Time",
+        "Disk Reads",
+        "Disk Writes",
+        "Memory",
+        "Real Mem",
+        "Sample Time",
+        "% CPU",
+        "Request Count",
+        "Response Bytes",
+        "Request Bytes",
+    ]
+    chosen = []
+    seen = set()
+    for preferred_name in preferred_names:
+        for trace_name, metric_name in trace_metrics:
+            if metric_name != preferred_name:
+                continue
+            if trace_name != "Activity Monitor" and metric_name not in {"Sample Time"}:
+                continue
+            if qa_trace.get((trace_name, metric_name)) is None or legacy_trace.get((trace_name, metric_name)) is None:
+                continue
+            key = (trace_name, metric_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            chosen.append(key)
+            break
+        if len(chosen) >= limit:
+            return chosen
+    for key in trace_metrics:
+        if key in seen:
+            continue
+        if qa_trace.get(key) is None or legacy_trace.get(key) is None:
+            continue
+        chosen.append(key)
+        if len(chosen) >= limit:
+            break
+    return chosen
+
+
+def _dashboard_metric_label(trace_name, metric_name):
+    if trace_name == "Activity Monitor":
+        return metric_name
+    return f"{trace_name}: {metric_name}"
+
+
+def _build_dashboard_table(rows, headers, kind):
+    if not rows:
+        return "<div class='muted'>No comparison rows available for this panel.</div>"
+    table_rows = ["<div class='dashboard-table-wrap'><table class='dashboard-table'>"]
+    table_rows.append("<tr>" + "".join(f"<th>{_escape(header)}</th>" for header in headers) + "</tr>")
+    for row in rows:
+        delta = row.get("delta")
+        delta_class = "delta-flat"
+        if delta is not None:
+            delta_class = "delta-good" if delta >= 0 else "delta-bad"
+        value_suffix = "s" if kind == "scenario" else ""
+        metric_name = row["name"]
+        rewrite_value = row["qa"]
+        legacy_value = row["legacy"]
+        if kind == "trace":
+            rewrite_text = _format_metric_value(metric_name, rewrite_value)
+            legacy_text = _format_metric_value(metric_name, legacy_value)
+        else:
+            rewrite_text = f"{_format_number(rewrite_value, 3)} {value_suffix}".strip()
+            legacy_text = f"{_format_number(legacy_value, 3)} {value_suffix}".strip()
+        delta_text = _format_percent(delta)
+        table_rows.append(
+            "<tr>"
+            f"<td class='name'>{_escape(metric_name)}</td>"
+            f"<td>{_escape(legacy_text)}</td>"
+            f"<td>{_escape(rewrite_text)}</td>"
+            f"<td class='{delta_class}'>{_escape(delta_text)}</td>"
+            "</tr>"
+        )
+    table_rows.append("</table></div>")
+    return "".join(table_rows)
+
+
 def _build_delta_chart(metrics, qa_values, legacy_values):
     if not metrics:
         return "<div class='muted'>No scenario deltas available for this comparison.</div>"
@@ -324,10 +468,10 @@ def _build_delta_chart(metrics, qa_values, legacy_values):
             delta_width = (abs(delta) / max_delta) * (chart_width / 2)
             if delta >= 0:
                 x = center
-                klass = "delta-worse"
+                klass = "delta-better"
             else:
                 x = center - delta_width
-                klass = "delta-better"
+                klass = "delta-worse"
             rows.append(f"<rect x='{x}' y='{y - 8}' width='{max(delta_width, 2)}' height='16' rx='8' class='{klass}'/>")
             rows.append(f"<text x='{left + chart_width + 14}' y='{y + 4}' class='value-label'>{_escape(_format_percent(delta))}</text>")
         else:
@@ -419,7 +563,7 @@ def _build_trace_cards(trace_metrics, qa_trace, legacy_trace):
             "<div class='trace-row'><span>Legacy</span>"
             f"<div class='mini-track'><div class='legacy-bar' style='width:{legacy_pct:.1f}%'></div></div>"
             f"<strong>{_escape(_format_metric_value(metric_name, legacy_value))}</strong></div>"
-            f"<div class='trace-delta'>{_escape(_format_percent(delta))} vs Re-Write baseline</div>"
+            f"<div class='trace-delta'>{_escape(_format_percent(delta))} improvement vs Legacy baseline</div>"
             "</div>"
         )
     return "".join(cards)
@@ -438,7 +582,7 @@ def _write_csv(path, scenario_names, step_runs, qa_agg, legacy_agg, trace_metric
     with open(path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["Scenario Comparison"])
-        writer.writerow(["Scenario", "Re-Write Average", "Legacy Average", "Legacy vs Re-Write %"])
+        writer.writerow(["Scenario", "Re-Write Average", "Legacy Average", "Improvement vs Legacy %"])
         for name in scenario_names:
             writer.writerow([
                 name,
@@ -456,7 +600,7 @@ def _write_csv(path, scenario_names, step_runs, qa_agg, legacy_agg, trace_metric
             writer.writerow(row)
         writer.writerow([])
         writer.writerow(["Trace Comparison"])
-        writer.writerow(["Trace", "Metric", "Re-Write Average", "Legacy Average", "Legacy vs Re-Write %"])
+        writer.writerow(["Trace", "Metric", "Re-Write Average", "Legacy Average", "Improvement vs Legacy %"])
         for trace_name, metric_name in trace_metrics:
             writer.writerow([
                 trace_name,
@@ -492,12 +636,67 @@ def _build_html(payload):
     )
     cards = []
     total_delta_values = [_percent_diff(qa_agg.get(name), legacy_agg.get(name)) for name in scenario_names]
-    numeric_deltas = [abs(v) for v in total_delta_values if v is not None]
     cards.append(("Scenario Set", str(len(scenario_names)), "Compared across both apps"))
     cards.append(("Sequence", sequence_label, f"{pass_count} back-to-back {pass_label}"))
     if device_label:
         cards.append(("Device", device_label, "Shared hardware across captured passes"))
-    cards.append(("Largest Delta", _format_percent(max(total_delta_values, key=lambda v: abs(v) if v is not None else -1, default=None)), "Worst scenario gap"))
+    cards.append(("Largest Shift", _format_percent(max(total_delta_values, key=lambda v: abs(v) if v is not None else -1, default=None)), "Largest scenario movement vs Legacy"))
+
+    dashboard_scenarios = [
+        name for name in ordered_scenarios
+        if qa_agg.get(name) is not None and legacy_agg.get(name) is not None
+    ][:8]
+    if not dashboard_scenarios:
+        dashboard_scenarios = ordered_scenarios[:8]
+    dashboard_scenario_rows = [
+        {
+            "name": name,
+            "qa": qa_agg.get(name),
+            "legacy": legacy_agg.get(name),
+            "delta": _percent_diff(qa_agg.get(name), legacy_agg.get(name)),
+        }
+        for name in dashboard_scenarios
+    ]
+    dashboard_trace_metrics = _pick_trace_dashboard_metrics(trace_metrics, qa_trace, legacy_trace, limit=6)
+    dashboard_trace_rows = [
+        {
+            "name": _dashboard_metric_label(trace_name, metric_name),
+            "qa": qa_trace.get((trace_name, metric_name)),
+            "legacy": legacy_trace.get((trace_name, metric_name)),
+            "delta": _percent_diff(qa_trace.get((trace_name, metric_name)), legacy_trace.get((trace_name, metric_name))),
+        }
+        for trace_name, metric_name in dashboard_trace_metrics
+    ]
+    technical_chart_metrics = [row["name"] for row in dashboard_trace_rows]
+    technical_chart_qa = {row["name"]: _chart_numeric_value(row["name"], row["qa"]) for row in dashboard_trace_rows}
+    technical_chart_legacy = {row["name"]: _chart_numeric_value(row["name"], row["legacy"]) for row in dashboard_trace_rows}
+    scenario_dashboard_table = _build_dashboard_table(
+        dashboard_scenario_rows,
+        ["Scenario", "Legacy", "Re-Write", "Improvement"],
+        "scenario",
+    )
+    trace_dashboard_table = _build_dashboard_table(
+        dashboard_trace_rows,
+        ["Technical Metric", "Legacy", "Re-Write", "Efficiency Gain"],
+        "trace",
+    )
+    scenario_overview_chart = _build_vertical_grouped_chart(
+        dashboard_scenarios,
+        qa_agg,
+        legacy_agg,
+        lambda value: _format_number(value, 2) if value is not None else "n/a",
+        "scenario-overview-chart",
+    )
+    if dashboard_trace_rows:
+        trace_overview_chart = _build_vertical_grouped_chart(
+            technical_chart_metrics,
+            technical_chart_qa,
+            technical_chart_legacy,
+            lambda value: _format_number(value, 1) if value is not None else "n/a",
+            "technical-overview-chart",
+        )
+    else:
+        trace_overview_chart = "<div class='muted'>No technical trace metrics were captured in these selected passes.</div>"
 
     grouped_chart = _build_grouped_bar_rows(ordered_scenarios, qa_agg, legacy_agg, lambda v: _format_metric_value("scenario", v))
     grouped_chart_legend = _build_grouped_chart_legend()
@@ -557,7 +756,7 @@ def _build_html(payload):
         "<html><head><meta charset='utf-8'>",
         "<title>PerfoMace Combined Comparison</title>",
         "<style>",
-        ":root{--ink:#131722;--muted:#677287;--line:#d7dde7;--panel:#ffffff;--surface:#f6f8fc;--qa:#145af4;--legacy:#ff6a3d;--accent:#0f172a;--good:#1f9d63;--bad:#ca3d3d}",
+        ":root{--ink:#131722;--muted:#677287;--line:#d7dde7;--panel:#ffffff;--surface:#f6f8fc;--qa:#67b8ee;--legacy:#7c8699;--accent:#0f172a;--good:#1f9d63;--bad:#ca3d3d}",
         "body{margin:0;font-family:'Avenir Next','Helvetica Neue',sans-serif;color:var(--ink);background:linear-gradient(180deg,#f5f8ff 0%,#fffaf4 100%)}",
         ".wrap{max-width:1580px;margin:0 auto;padding:28px 28px 40px}",
         ".hero{padding:28px;border-radius:24px;background:linear-gradient(135deg,#0f172a 0%,#1f2f55 55%,#0d5ef7 100%);color:#fff;box-shadow:0 22px 55px rgba(17,24,39,.18)}",
@@ -571,6 +770,21 @@ def _build_html(payload):
         ".metric-card .kicker{text-transform:uppercase;letter-spacing:.08em;font-size:11px;color:rgba(255,255,255,.62)}",
         ".metric-card .value{margin-top:6px;font-size:26px;font-weight:700}",
         ".metric-card .sub{margin-top:4px;font-size:12px;color:rgba(255,255,255,.72)}",
+        ".dashboard-grid{display:grid;grid-template-columns:minmax(420px,0.95fr) minmax(560px,1.25fr);gap:20px;margin-top:22px}",
+        ".dashboard-stack{display:grid;gap:18px}",
+        ".dashboard-card{background:#fff;border:1px solid var(--line);border-radius:22px;padding:18px 20px;box-shadow:0 10px 30px rgba(15,23,42,.06)}",
+        ".dashboard-card h3{margin:0;font-size:18px}",
+        ".dashboard-card .sub{margin-top:6px;color:var(--muted);font-size:13px;line-height:1.5}",
+        ".dashboard-table-wrap{margin-top:14px;overflow:auto}",
+        ".dashboard-table{width:100%;border-collapse:collapse;min-width:560px}",
+        ".dashboard-table th,.dashboard-table td{padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px;text-align:left}",
+        ".dashboard-table th{background:#111827;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.06em;position:sticky;top:0}",
+        ".dashboard-table tr:nth-child(even) td{background:#f7f9fc}",
+        ".dashboard-table td.name{font-weight:700;color:var(--ink)}",
+        ".delta-good{color:var(--good);font-weight:800}",
+        ".delta-bad{color:var(--bad);font-weight:800}",
+        ".delta-flat{color:var(--muted);font-weight:700}",
+        ".muted{color:var(--muted);font-size:13px;line-height:1.6}",
         ".section{margin-top:22px;background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:20px 22px;box-shadow:0 10px 30px rgba(15,23,42,.06)}",
         ".section h2{margin:0;font-size:20px}",
         ".section .sub{margin-top:6px;color:var(--muted);font-size:13px}",
@@ -579,6 +793,12 @@ def _build_html(payload):
         ".chart-shell{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:16px}",
         ".chart-title{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px}",
         ".chart{width:100%;height:auto;display:block}",
+        ".vertical-chart .baseline{stroke:#cfd7e6;stroke-width:2}",
+        ".vertical-chart .bar-qa{fill:var(--qa)}",
+        ".vertical-chart .bar-legacy{fill:var(--legacy)}",
+        ".vertical-chart .bar-label{font-size:11px;fill:var(--ink);font-weight:700}",
+        ".vertical-chart .bar-value{font-size:10px;fill:#44506a}",
+        ".vertical-chart .legend-text{font-size:12px;fill:var(--muted);font-weight:700}",
         ".chart-legend{display:flex;gap:18px;flex-wrap:wrap;align-items:center;justify-content:center;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}",
         ".legend-item{display:inline-flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;font-weight:600}",
         ".legend-swatch{display:inline-block;width:18px;height:10px;border-radius:999px}",
@@ -620,7 +840,7 @@ def _build_html(payload):
         "table.basic th,table.basic td{padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px;text-align:left}",
         "table.basic th{text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-size:10px}",
         ".watermark{position:fixed;right:18px;bottom:14px;padding:7px 12px;border-radius:999px;border:1px solid rgba(148,163,184,.30);background:rgba(255,255,255,.82);backdrop-filter:blur(8px);color:#334155;font-size:11px;font-weight:700;letter-spacing:.02em;box-shadow:0 8px 20px rgba(15,23,42,.08)}",
-        "@media (max-width:1100px){.split,.split.equal{grid-template-columns:1fr}.hero-top{flex-direction:column}.logo{width:52%}}",
+        "@media (max-width:1200px){.dashboard-grid,.split,.split.equal{grid-template-columns:1fr}.hero-top{flex-direction:column}.logo{width:52%}}",
         "</style></head><body><div class='wrap'>",
         "<div class='hero'>",
         "<div class='hero-top'>",
@@ -644,6 +864,35 @@ def _build_html(payload):
     html.extend(["</div>", "</div>"])
 
     html.extend([
+        "<div class='dashboard-grid'>",
+        "<div class='dashboard-stack'>",
+        "<div class='dashboard-card'>",
+        "<h3>Performance Analysis</h3>",
+        "<div class='sub'>Legacy and Re-Write are shown side by side with improvement percentages based on the Legacy baseline, so positive values mean the Re-Write got faster.</div>",
+        scenario_dashboard_table,
+        "</div>",
+        "<div class='dashboard-card'>",
+        "<h3>Technical Metrics</h3>",
+        "<div class='sub'>System metrics stay in a separate panel so CPU, memory, and disk changes do not get mixed into the scenario timing scale.</div>",
+        trace_dashboard_table,
+        "</div>",
+        "</div>",
+        "<div class='dashboard-stack'>",
+        "<div class='dashboard-card'>",
+        "<h3>Scenario Comparison</h3>",
+        "<div class='sub'>Grouped bars show the captured Legacy and Re-Write scenario timings in the compact dashboard view.</div>",
+        scenario_overview_chart,
+        "</div>",
+        "<div class='dashboard-card'>",
+        "<h3>Extended Trace Analysis</h3>",
+        "<div class='sub'>When technical traces are available, this view highlights system resource differences separately from the user-facing flow timings.</div>",
+        trace_overview_chart,
+        "</div>",
+        "</div>",
+        "</div>",
+    ])
+
+    html.extend([
         "<div class='section'>",
         "<h2>Scenario Comparison</h2>",
         "<div class='sub'>Grouped bars compare the captured Re-Write pass against the captured Legacy pass for each user-facing scenario.</div>",
@@ -653,7 +902,7 @@ def _build_html(payload):
         grouped_chart_legend,
         "</div>",
         "<div class='split' style='margin-top:16px'>",
-        "<div class='chart-shell'><div class='chart-title'>Delta From Re-Write Baseline</div>",
+        "<div class='chart-shell'><div class='chart-title'>Improvement vs Legacy Baseline</div>",
         delta_chart,
         "</div>",
         "<div class='chart-shell'><div class='chart-title'>Heatmap By Pass</div>",
@@ -672,7 +921,7 @@ def _build_html(payload):
         "<div class='section'>",
         "<h2>Scenario Table</h2>",
         "<div class='sub'>Raw values and deltas for the Re-Write and Legacy passes captured in this comparison session.</div>",
-        "<div class='table-wrap'><table class='basic'><tr><th>Scenario</th><th>Re-Write Average</th><th>Legacy Average</th><th>Legacy vs Re-Write</th></tr>",
+        "<div class='table-wrap'><table class='basic'><tr><th>Scenario</th><th>Re-Write Average</th><th>Legacy Average</th><th>Improvement vs Legacy</th></tr>",
         "".join(rows),
         "</table></div></div>",
         "<div class='section'>",
@@ -684,7 +933,7 @@ def _build_html(payload):
         "<div class='section'>",
         "<h2>Trace Table</h2>",
         "<div class='sub'>Trace metrics captured for the Re-Write and Legacy passes in this comparison session.</div>",
-        "<div class='table-wrap'><table class='basic'><tr><th>Trace</th><th>Metric</th><th>Re-Write Average</th><th>Legacy Average</th><th>Legacy vs Re-Write</th></tr>",
+        "<div class='table-wrap'><table class='basic'><tr><th>Trace</th><th>Metric</th><th>Re-Write Average</th><th>Legacy Average</th><th>Improvement vs Legacy</th></tr>",
         "".join(trace_rows),
         "</table></div></div>",
         "<div class='watermark'>JD with iHeart</div>",

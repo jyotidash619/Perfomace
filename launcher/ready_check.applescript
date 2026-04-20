@@ -100,7 +100,11 @@ on presentReadyCheck(parsedResult, projectRoot)
 			set end of highlightedChecks to currentCheck
 		end if
 	end repeat
-	if (count of highlightedChecks) is 0 then set highlightedChecks to items 1 thru (min of {3, count of checkRecords}) of checkRecords
+	if (count of highlightedChecks) is 0 then
+		set highlightCount to count of checkRecords
+		if highlightCount > 3 then set highlightCount to 3
+		if highlightCount > 0 then set highlightedChecks to items 1 thru highlightCount of checkRecords
+	end if
 	
 	repeat with currentCheck in highlightedChecks
 		set checkTitle to checkTitle of currentCheck

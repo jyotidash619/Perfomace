@@ -13,6 +13,7 @@ struct ContentView: View {
     @AppStorage("perfomace_project_path") private var projectPath: String = ""
     @State private var didAutoDetect: Bool = false
     @State private var detailTab: DetailTab = .report
+    @State private var showReadyChecks: Bool = false
 
     private let repeatFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
@@ -128,6 +129,15 @@ struct ContentView: View {
             }
             return leftRank < rightRank
         }
+    }
+
+    private var readySetupChecks: [SetupCheckStatus] {
+        orderedSetupChecks.filter { $0.state == .ok }
+    }
+
+    private var primarySetupIssue: SetupCheckStatus? {
+        guard let summary = runner.setupSummary else { return nil }
+        return summary.blockingChecks.first ?? summary.warningChecks.first
     }
 
     var body: some View {
@@ -570,8 +580,37 @@ struct ContentView: View {
                     .font(.system(size: 11, weight: .medium, design: .default))
                     .foregroundStyle(.secondary)
             } else if runner.setupSummary != nil {
-                ForEach(orderedSetupChecks) { check in
-                    setupCheckRow(check)
+                if let summary = runner.setupSummary {
+                    setupGuidanceCard(summary)
+
+                    if !summary.blockingChecks.isEmpty {
+                        setupSection(title: "Blockers", checks: summary.blockingChecks)
+                    }
+
+                    if !summary.warningChecks.isEmpty {
+                        setupSection(title: "Warnings", checks: summary.warningChecks)
+                    }
+
+                    if !readySetupChecks.isEmpty {
+                        DisclosureGroup(isExpanded: $showReadyChecks) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(readySetupChecks) { check in
+                                    setupCheckRow(check)
+                                }
+                            }
+                            .padding(.top, 8)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "checkmark.seal.fill")
+                                    .foregroundStyle(Color.green.opacity(0.85))
+                                Text("Ready checks (\(readySetupChecks.count))")
+                                    .font(.system(size: 11.5, weight: .semibold, design: .default))
+                                    .foregroundStyle(deepSapphire)
+                            }
+                        }
+                        .padding(10)
+                        .background(cardBackground(cornerRadius: 14))
+                    }
                 }
 
                 if let checkedAt = runner.setupCheckedAt {
@@ -688,6 +727,59 @@ struct ContentView: View {
         runner.lastError = "PerfoMace Ready Check.app was not found at: \(readyCheckAppURL.path). Rebuild the launcher bundle to regenerate it."
     }
 
+    private func openXcodeApp() {
+        let xcodeURL = URL(fileURLWithPath: "/Applications/Xcode.app", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: xcodeURL.path) else {
+            runner.lastError = "Xcode.app was not found in /Applications. Install Xcode first."
+            return
+        }
+        if !NSWorkspace.shared.open(xcodeURL) {
+            runner.lastError = "Xcode.app could not be opened."
+        }
+    }
+
+    private func copyTextToClipboard(_ value: String, successMessage: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(value, forType: .string)
+        runner.lastError = successMessage
+    }
+
+    private func copySetupDiagnostics(_ summary: SetupSummary) {
+        var lines: [String] = []
+        lines.append("PerfoMace Setup Diagnostics")
+        lines.append("Project: \(projectRoot?.path ?? "Unknown")")
+        lines.append("App target: \(config.appChoice.displayName)")
+        if let checkedAt = runner.setupCheckedAt {
+            lines.append("Checked at: \(setupTimestampFormatter.string(from: checkedAt))")
+        }
+        lines.append("Status: \(summary.headline)")
+        lines.append("Summary: \(summary.summaryLine)")
+        lines.append("")
+        for check in summary.checks {
+            lines.append("[\(check.state.displayName)] \(check.title)")
+            lines.append(check.detail)
+            if !check.action.isEmpty {
+                lines.append("Fix: \(check.action)")
+            }
+            lines.append("")
+        }
+        copyTextToClipboard(lines.joined(separator: "\n"), successMessage: "Setup diagnostics copied.")
+    }
+
+    private func shouldOfferOpenXcode(for check: SetupCheckStatus) -> Bool {
+        switch check.id {
+        case "xcode_select", "developer_dir", "swift_toolchain", "xcodebuild", "ios_targets", "codesigning":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func shouldOfferOpenResults(for check: SetupCheckStatus) -> Bool {
+        check.id == "results_dirs"
+    }
+
     private func setupRank(for state: SetupCheckState) -> Int {
         switch state {
         case .fail:
@@ -737,6 +829,98 @@ struct ContentView: View {
         formatter.timeStyle = .short
         formatter.dateStyle = .none
         return formatter
+    }
+
+    private func setupSection(title: String, checks: [SetupCheckStatus]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 11.5, weight: .semibold, design: .default))
+                .foregroundStyle(deepSapphire.opacity(0.78))
+                .textCase(.uppercase)
+                .tracking(0.8)
+            ForEach(checks) { check in
+                setupCheckRow(check)
+            }
+        }
+    }
+
+    private func setupGuidanceCard(_ summary: SetupSummary) -> some View {
+        let issue = primarySetupIssue
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(summary.blockingChecks.isEmpty ? "Next Best Fix" : "Primary Blocker")
+                    .font(.system(size: 11.5, weight: .semibold, design: .default))
+                    .foregroundStyle(deepSapphire.opacity(0.78))
+                    .textCase(.uppercase)
+                    .tracking(0.8)
+                Spacer()
+                if let issue {
+                    statusPill(issue.state.displayName, isFailed: issue.state == .fail)
+                }
+            }
+
+            if let issue {
+                Text(issue.title)
+                    .font(.system(size: 13, weight: .semibold, design: .default))
+                    .foregroundStyle(deepSapphire)
+                Text(issue.detail)
+                    .font(.system(size: 11, weight: .medium, design: .default))
+                    .foregroundStyle(issue.state == .fail ? rose : deepSapphire.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+                if !issue.action.isEmpty {
+                    Text("Suggested fix: \(issue.action)")
+                        .font(.system(size: 10.5, weight: .regular, design: .default))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 8) {
+                    if shouldOfferOpenXcode(for: issue) {
+                        Button("Open Xcode") {
+                            openXcodeApp()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .tint(golden)
+                    }
+                    if shouldOfferOpenResults(for: issue), let root = projectRoot {
+                        Button("Open Results") {
+                            runner.openResults(projectRoot: root)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .tint(golden)
+                    }
+                    if !issue.action.isEmpty {
+                        Button("Copy Fix") {
+                            copyTextToClipboard(issue.action, successMessage: "Suggested fix copied.")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    Button("Copy Diagnostics") {
+                        copySetupDiagnostics(summary)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            } else {
+                Text("Everything important passed. You can still copy the setup diagnostics if you want to share the exact readiness state with someone else.")
+                    .font(.system(size: 11, weight: .medium, design: .default))
+                    .foregroundStyle(deepSapphire.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Copy Diagnostics") {
+                    copySetupDiagnostics(summary)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(12)
+        .background(cardBackground(cornerRadius: 16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke((summary.overallState == .fail ? rose : sapphire).opacity(0.18), lineWidth: 1)
+        )
     }
 
     private func setupCheckRow(_ check: SetupCheckStatus) -> some View {
