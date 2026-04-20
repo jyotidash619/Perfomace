@@ -129,12 +129,14 @@ It will try to self-heal common local issues such as:
 - bad current Xcode developer directory for this shell session
 - missing `python3`
 - no usable iOS simulator/runtime or prepared device
+- missing Apple Development signing identity for real-device runs
 
 When everything is healthy, it will print:
 
 - `PerfoMace setup check complete. Ready to go.`
 
 If the Mac still needs manual help, it will stop early and tell you exactly what to run next.
+The launcher now shows the same readiness information in its `Setup Readiness` panel, and the Ready Check app opens a guided summary dialog with the top blockers and fix steps.
 
 PerfoMace now also validates the selected target app at run time before the full harness starts.
 If `com.clearchannel.iheartradio.qa` or `com.clearchannel.iheartradio.legacy.qa` is not installed on the chosen simulator or iPhone, the run will fail immediately with a clear message instead of failing later inside UI tests.

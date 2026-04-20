@@ -103,7 +103,11 @@ The ready check validates:
 - `xcodebuild`
 - `python3`
 - at least one usable iOS target
+- Apple Development signing identity readiness
 - results folder readiness
+
+The launcher now shows the same setup data in a `Setup Readiness` panel before each run.
+The double-click Ready Check app also shows a guided summary dialog with blockers, warnings, and fix steps instead of only dropping you into Terminal.
 
 Success output:
 
