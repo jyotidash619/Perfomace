@@ -1263,18 +1263,39 @@ class iHeartPerfTests: XCTestCase {
         return false
     }
 
+    private func tabAliases(label: String, identifier: String) -> [String] {
+        var aliases = [label, identifier]
+        switch label.lowercased() {
+        case UI.homeTab.lowercased():
+            aliases.append(contentsOf: ["tab_yourHome", "homeTab"])
+        case "search":
+            aliases.append(contentsOf: ["tab_search", "searchTab"])
+        case "radio":
+            aliases.append(contentsOf: ["tab_radio", "radioTab"])
+        case "podcasts":
+            aliases.append(contentsOf: ["tab_podcasts", "podcastsTab"])
+        case "playlists":
+            aliases.append(contentsOf: ["tab_playlists", "playlistsTab"])
+        default:
+            break
+        }
+        return Array(Set(aliases.filter { !$0.isEmpty }))
+    }
+
     private func waitForSelectedTab(label: String, identifier: String, timeout: TimeInterval) -> Bool {
         if (label == UI.homeTab || identifier == "homeTab") && homeSurfaceVisible() {
             return true
         }
 
+        let aliases = tabAliases(label: label, identifier: identifier)
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
-            let candidates = [
-                app.tabBars.buttons[label],
-                app.tabBars.buttons[identifier],
-                app.buttons[identifier],
-            ]
+            let candidates = aliases.flatMap { alias in
+                [
+                    app.tabBars.buttons[alias],
+                    app.buttons[alias],
+                ]
+            }
             if candidates.contains(where: { $0.exists && $0.isSelected }) {
                 return true
             }
@@ -1291,41 +1312,28 @@ class iHeartPerfTests: XCTestCase {
         if (label == UI.homeTab || identifier == "homeTab") && homeSurfaceVisible() {
             return
         }
-        let byLabel = app.tabBars.buttons[label]
-        if byLabel.waitForExistence(timeout: 3) {
-            if !byLabel.isSelected {
-                if byLabel.isHittable {
-                    byLabel.tap()
+        let aliases = tabAliases(label: label, identifier: identifier)
+        let candidates = aliases.flatMap { alias in
+            [
+                app.tabBars.buttons[alias],
+                app.buttons[alias],
+            ]
+        }
+
+        for candidate in candidates {
+            if !candidate.waitForExistence(timeout: 1.5) {
+                continue
+            }
+            if !candidate.isSelected {
+                if candidate.isHittable {
+                    candidate.tap()
                 } else {
-                    byLabel.forceTap()
+                    candidate.forceTap()
                 }
                 _ = waitForSelectedTab(label: label, identifier: identifier, timeout: 1.5)
             }
-            return
-        }
-
-        let byId = app.tabBars.buttons[identifier]
-        if byId.waitForExistence(timeout: 3) {
-            if !byId.isSelected {
-                if byId.isHittable {
-                    byId.tap()
-                } else {
-                    byId.forceTap()
-                }
-                _ = waitForSelectedTab(label: label, identifier: identifier, timeout: 1.5)
-            }
-            return
-        }
-
-        let fallbackById = app.buttons[identifier]
-        if fallbackById.waitForExistence(timeout: 2) {
-            if !fallbackById.isSelected {
-                if fallbackById.isHittable {
-                    fallbackById.tap()
-                } else {
-                    fallbackById.forceTap()
-                }
-                _ = waitForSelectedTab(label: label, identifier: identifier, timeout: 1.5)
+            if waitForSelectedTab(label: label, identifier: identifier, timeout: 0.8) {
+                return
             }
         }
     }
@@ -1575,26 +1583,28 @@ class iHeartPerfTests: XCTestCase {
 
         let candidates = [
             app.collectionViews["SearchResultsView"].cells.firstMatch,
-            app.collectionViews.firstMatch.cells.firstMatch,
             app.buttons.matching(NSPredicate(format: "identifier CONTAINS[c] 'playlist' OR identifier CONTAINS[c] 'artist' OR identifier CONTAINS[c] 'song' OR identifier CONTAINS[c] 'result' OR label CONTAINS[c] 'playlist' OR label CONTAINS[c] 'artist' OR label CONTAINS[c] 'song' OR label CONTAINS[c] %@", query)).firstMatch,
             app.otherElements.matching(NSPredicate(format: "identifier CONTAINS[c] 'playlist' OR identifier CONTAINS[c] 'artist' OR identifier CONTAINS[c] 'song' OR identifier CONTAINS[c] 'result' OR label CONTAINS[c] 'playlist' OR label CONTAINS[c] 'artist' OR label CONTAINS[c] 'song' OR label CONTAINS[c] %@", query)).firstMatch,
+            app.collectionViews["SearchResultsView"].descendants(matching: .button).firstMatch,
         ]
         return tapFirstExisting(candidates, context: "SearchResultMissing", failIfMissing: false)
     }
 
     private func firstSearchResultTarget(query: String) -> XCUIElement? {
         let queryPredicate = NSPredicate(format: "label CONTAINS[c] %@ OR identifier CONTAINS[c] %@ OR value CONTAINS[c] %@", query, query, query)
-        let contentPredicate = NSPredicate(format: "identifier CONTAINS[c] 'playlist' OR identifier CONTAINS[c] 'artist' OR identifier CONTAINS[c] 'song' OR identifier CONTAINS[c] 'result' OR identifier CONTAINS[c] 'card' OR label CONTAINS[c] 'playlist' OR label CONTAINS[c] 'artist' OR label CONTAINS[c] 'song' OR label CONTAINS[c] 'station'")
+        let contentPredicate = NSPredicate(format: "identifier CONTAINS[c] 'playlist' OR identifier CONTAINS[c] 'artist' OR identifier CONTAINS[c] 'song' OR identifier CONTAINS[c] 'result' OR label CONTAINS[c] 'playlist' OR label CONTAINS[c] 'artist' OR label CONTAINS[c] 'song' OR label CONTAINS[c] 'station'")
+        let searchResultsView = app.collectionViews["SearchResultsView"]
 
         let candidateGroups: [[XCUIElement]] = [
-            app.collectionViews["SearchResultsView"].cells.allElementsBoundByIndex,
-            app.collectionViews.firstMatch.cells.matching(queryPredicate).allElementsBoundByIndex,
-            app.collectionViews.firstMatch.cells.allElementsBoundByIndex,
+            searchResultsView.cells.matching(queryPredicate).allElementsBoundByIndex,
+            searchResultsView.cells.allElementsBoundByIndex,
+            searchResultsView.descendants(matching: .button).matching(queryPredicate).allElementsBoundByIndex,
+            searchResultsView.descendants(matching: .other).matching(queryPredicate).allElementsBoundByIndex,
             app.buttons.matching(queryPredicate).allElementsBoundByIndex,
-            app.buttons.matching(contentPredicate).allElementsBoundByIndex,
             app.otherElements.matching(queryPredicate).allElementsBoundByIndex,
-            app.otherElements.matching(contentPredicate).allElementsBoundByIndex,
             searchResultContainers(for: query),
+            app.buttons.matching(contentPredicate).allElementsBoundByIndex,
+            app.otherElements.matching(contentPredicate).allElementsBoundByIndex,
         ]
 
         for group in candidateGroups {
@@ -1652,8 +1662,9 @@ class iHeartPerfTests: XCTestCase {
         let frame = element.frame
         guard !frame.isEmpty else { return false }
 
+        let viewport = contentViewportBounds()
         let tabBarTop = app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame.minY : .greatestFiniteMagnitude
-        if frame.maxY >= tabBarTop || frame.minY < 120 {
+        if frame.maxY >= tabBarTop || frame.minY < 120 || !frame.intersects(viewport) {
             return false
         }
 
@@ -1677,17 +1688,45 @@ class iHeartPerfTests: XCTestCase {
         if strings.contains("tab_search") || strings.contains("tab_yourhome") || strings.contains("tab_radio") || strings.contains("tab_podcasts") || strings.contains("tab_playlists") {
             return false
         }
-
-        if strings.contains(query.lowercased()) {
-            return true
+        if strings.contains("contenttabswitcher")
+            || strings.contains("tabbutton")
+            || strings.contains("searchplaylists")
+            || strings.contains("searchartists")
+            || strings.contains("searchsongs")
+            || strings.contains("searchstations")
+            || strings.contains("searchpodcasts")
+            || strings.contains("searchepisodes")
+            || strings.contains("searchall") {
+            return false
+        }
+        if strings.contains("featuredplaylistsection")
+            || strings.contains("moodsandactivitiessection")
+            || strings.contains("decadessection")
+            || strings.contains("playlistgenresgrid")
+            || strings.contains("recommendedforyousection")
+            || strings.contains("carouselcard")
+            || strings.contains("gridcard")
+            || strings.contains("playliststab")
+            || strings.contains("radiodialcardcell")
+            || strings.contains("scan stations") {
+            return false
         }
 
-        return strings.contains("playlist")
+        let searchResultsView = app.collectionViews["SearchResultsView"]
+        let isInsideSearchResultsView = searchResultsView.exists && !searchResultsView.frame.isEmpty && searchResultsView.frame.intersects(frame)
+        let hasQueryMatch = strings.contains(query.lowercased())
+        let looksLikeResult = strings.contains("playlist")
             || strings.contains("artist")
             || strings.contains("song")
             || strings.contains("station")
             || strings.contains("episode")
             || strings.contains("result")
+
+        if isInsideSearchResultsView && (hasQueryMatch || looksLikeResult) {
+            return true
+        }
+
+        return hasQueryMatch && looksLikeResult
     }
 
     private func contentViewportBounds() -> CGRect {
@@ -3342,16 +3381,13 @@ extension XCUIElement {
     }
 
     func forceTap() {
-        if self.exists && self.isHittable {
-            self.tap()
-            return
-        }
+        guard self.exists else { return }
 
-        if self.exists {
-            let frame = self.frame
-            if !frame.isEmpty && frame.width > 1 && frame.height > 1 {
-                let app = perfTargetApplication()
-                let appFrame = app.frame
+        let frame = self.frame
+        if !frame.isEmpty && frame.width > 1 && frame.height > 1 {
+            let app = perfTargetApplication()
+            let appFrame = app.frame
+            if !appFrame.isEmpty && appFrame.intersects(frame) {
                 let x = min(max(frame.midX, appFrame.minX + 1), appFrame.maxX - 1)
                 let y = min(max(frame.midY, appFrame.minY + 1), appFrame.maxY - 1)
                 let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
@@ -3359,8 +3395,6 @@ extension XCUIElement {
                 return
             }
         }
-
-        guard self.exists else { return }
 
         let coordinate: XCUICoordinate = self.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         coordinate.tap()

@@ -274,6 +274,29 @@ def _build_element_lookup(root):
     return lookup
 
 
+def _table_has_rows(table_xml):
+    if not table_xml:
+        return False
+    try:
+        root = ET.fromstring(table_xml)
+    except Exception:
+        return False
+    return bool(root.findall(".//row"))
+
+
+def _trace_table_schema_name(table_xml):
+    if not table_xml:
+        return None
+    try:
+        root = ET.fromstring(table_xml)
+    except Exception:
+        return None
+    schema = root.find(".//schema")
+    if schema is None:
+        return None
+    return (schema.attrib.get("name") or "").strip() or None
+
+
 def _resolve_element_value(elem, lookup):
     resolved = {
         "text": (elem.text or "").strip(),
@@ -287,6 +310,30 @@ def _resolve_element_value(elem, lookup):
         if not resolved["fmt"]:
             resolved["fmt"] = referenced.get("fmt", "")
     return resolved
+
+
+def _resolve_row_process_text(row, lookup, process_columns=None):
+    process_columns = process_columns or {"Process", "Process Name"}
+    cols = row.findall("col")
+    if not cols:
+        cols = [child for child in list(row) if isinstance(child.tag, str)]
+
+    for idx, col in enumerate(cols):
+        name = col.attrib.get("name") or f"col{idx}"
+        if name in process_columns:
+            resolved = _resolve_element_value(col, lookup)
+            value = (resolved.get("fmt") or resolved.get("text") or "").strip()
+            if value:
+                return value
+
+    for candidate_tag in ("process", "thread"):
+        candidate = row.find(candidate_tag)
+        if candidate is not None:
+            resolved = _resolve_element_value(candidate, lookup)
+            value = (resolved.get("fmt") or resolved.get("text") or "").strip()
+            if value:
+                return value
+    return ""
 
 
 def _extract_numeric_summary(table_xml, process_name=None, process_bundle_id=None, process_columns=None):
@@ -326,6 +373,8 @@ def _extract_numeric_summary(table_xml, process_name=None, process_bundle_id=Non
             resolved_cols.append((name, resolved))
             if process_name and name in process_columns:
                 row_process = (resolved.get("fmt") or resolved.get("text") or "").strip()
+        if process_name and not row_process:
+            row_process = _resolve_row_process_text(row, lookup, process_columns=process_columns)
         if process_name and not _process_matches_target(row_process, process_name=process_name, bundle_id=process_bundle_id):
             continue
         for name, resolved in resolved_cols:
@@ -344,6 +393,92 @@ def _extract_numeric_summary(table_xml, process_name=None, process_bundle_id=Non
             "min": min(nums),
             "count": len(nums),
         }
+    return summary
+
+
+def _scalar_stats(value):
+    numeric = float(value)
+    return {"avg": numeric, "max": numeric, "min": numeric, "count": 1}
+
+
+def _summarize_time_sample_table(table_xml, process_name=None, process_bundle_id=None):
+    if not table_xml:
+        return {}
+    try:
+        root = ET.fromstring(table_xml)
+    except Exception:
+        return {}
+
+    lookup = _build_element_lookup(root)
+    rows = root.findall(".//row")
+    if not rows:
+        return {}
+
+    sample_count = 0
+    timestamps = []
+    thread_ids = set()
+    state_counts = {}
+    type_counts = {}
+
+    for row in rows:
+        row_process = _resolve_row_process_text(row, lookup)
+        if process_name and not _process_matches_target(row_process, process_name=process_name, bundle_id=process_bundle_id):
+            continue
+
+        sample_count += 1
+
+        sample_time = row.find("sample-time")
+        if sample_time is not None:
+            resolved = _resolve_element_value(sample_time, lookup)
+            value = _parse_numeric_value(resolved.get("text") or resolved.get("fmt"))
+            if value is not None:
+                timestamps.append(value)
+
+        tid = row.find(".//tid")
+        if tid is not None:
+            resolved = _resolve_element_value(tid, lookup)
+            thread_id = (resolved.get("fmt") or resolved.get("text") or "").strip()
+            if thread_id:
+                thread_ids.add(thread_id)
+
+        thread_state = row.find("thread-state")
+        if thread_state is not None:
+            resolved = _resolve_element_value(thread_state, lookup)
+            state = (resolved.get("fmt") or resolved.get("text") or "").strip()
+            if state:
+                state_counts[state] = state_counts.get(state, 0) + 1
+
+        sample_kind = row.find("time-sample-kind")
+        if sample_kind is not None:
+            resolved = _resolve_element_value(sample_kind, lookup)
+            kind = (resolved.get("fmt") or resolved.get("text") or "").strip()
+            if kind:
+                type_counts[kind] = type_counts.get(kind, 0) + 1
+
+    if sample_count == 0:
+        return {}
+
+    summary = {
+        "Sample Count": _scalar_stats(sample_count),
+        "Unique Threads": _scalar_stats(len(thread_ids)),
+    }
+
+    if len(timestamps) >= 2:
+        capture_duration_s = max(0.0, (max(timestamps) - min(timestamps)) / 1_000_000_000.0)
+        summary["Capture Duration (s)"] = _scalar_stats(capture_duration_s)
+        if capture_duration_s > 0:
+            summary["Samples / s"] = _scalar_stats(sample_count / capture_duration_s)
+
+    for state_name in ("Running", "Blocked", "Waiting", "Suspended"):
+        count = state_counts.get(state_name)
+        if count:
+            summary[f"{state_name} Samples"] = _scalar_stats(count)
+
+    for kind_name in ("Timer Fired", "Stackshot"):
+        count = type_counts.get(kind_name)
+        if count:
+            summary[f"{kind_name} Samples"] = _scalar_stats(count)
+
     return summary
 
 
@@ -516,6 +651,14 @@ def _summarize_har(har_payload):
     return summary
 
 
+def _default_no_data_error(kind):
+    if kind == "cpu":
+        return "no time profiler sample rows exported"
+    if kind == "network":
+        return "no network transaction rows exported"
+    return "no numeric summary extracted"
+
+
 def _curate_network_summary(summary):
     preferred = [
         "Request Time (s)",
@@ -604,8 +747,10 @@ def _authoritative_preexport_error(kind, traces_dir, had_sidecar):
     if "failed to attach to target process" in lowered:
         return "failed to attach to target process"
     if kind == "network":
-        return "no payload exported"
-    return "no numeric summary extracted"
+        if "segmentation fault" in lowered:
+            return "network HAR export crashed"
+        return _default_no_data_error(kind)
+    return _default_no_data_error(kind)
 
 
 def _preexported_trace_summary(trace_path, kind, health, process_name=None, process_bundle_id=None):
@@ -641,14 +786,24 @@ def _preexported_trace_summary(trace_path, kind, health, process_name=None, proc
             sidecar_schema = "time-profile"
             try:
                 with open(exported_xml, "r", encoding="utf-8", errors="ignore") as f:
-                    summary = _extract_numeric_summary(
-                        f.read(),
-                        process_name=process_name,
-                        process_bundle_id=process_bundle_id,
-                    )
+                    table_xml = f.read()
+                    schema_name = _trace_table_schema_name(table_xml) or sidecar_schema
+                    sidecar_schema = schema_name
+                    if schema_name == "time-sample":
+                        summary = _summarize_time_sample_table(
+                            table_xml,
+                            process_name=process_name,
+                            process_bundle_id=process_bundle_id,
+                        )
+                    else:
+                        summary = _extract_numeric_summary(
+                            table_xml,
+                            process_name=process_name,
+                            process_bundle_id=process_bundle_id,
+                        )
                 if summary:
                     return {
-                        "schema": "time-profile",
+                        "schema": sidecar_schema,
                         "summary": summary,
                         "health": health,
                     }
@@ -721,9 +876,11 @@ def _preexported_trace_summary(trace_path, kind, health, process_name=None, proc
             sidecar_schema = "com-apple-cfnetwork-task-intervals"
             try:
                 with open(exported_table, "r", encoding="utf-8", errors="ignore") as f:
+                    table_xml = f.read()
+                    sidecar_schema = _trace_table_schema_name(table_xml) or sidecar_schema
                     summary = _curate_network_summary(
                         _summarize_network_table(
-                            f.read(),
+                            table_xml,
                             process_name=process_name,
                             process_bundle_id=process_bundle_id,
                         )
@@ -738,6 +895,11 @@ def _preexported_trace_summary(trace_path, kind, health, process_name=None, proc
                 pass
     authoritative_error = _authoritative_preexport_error(kind, traces_dir, had_sidecar)
     if authoritative_error:
+        if kind in {"cpu", "network"} and authoritative_error in {
+            _default_no_data_error(kind),
+            "network HAR export crashed",
+        }:
+            return None
         payload = {"error": authoritative_error, "health": health}
         if sidecar_schema:
             payload["schema"] = sidecar_schema
@@ -779,6 +941,7 @@ def _trace_summary(trace_path, kind, process_name=None, process_bundle_id=None):
     elif kind == "cpu":
         keywords = ["cpu", "time profiler", "profile", "sample", "running time"]
         preferred = [
+            "time-sample",
             "time-profile",
             "com.apple.xray.instrument-type.time-profiler",
             "com.apple.xray.time-profiler",
@@ -822,6 +985,12 @@ def _trace_summary(trace_path, kind, process_name=None, process_bundle_id=None):
                     process_bundle_id=process_bundle_id,
                 )
             )
+        elif kind == "cpu" and schema == "time-sample":
+            summary = _summarize_time_sample_table(
+                table_xml,
+                process_name=process_name,
+                process_bundle_id=process_bundle_id,
+            )
         else:
             summary = _extract_numeric_summary(
                 table_xml,
@@ -834,7 +1003,7 @@ def _trace_summary(trace_path, kind, process_name=None, process_bundle_id=None):
                 summary = _curate_network_summary(summary)
         if summary:
             return {"schema": schema, "summary": summary, "health": health}
-        last_error = "no numeric summary extracted"
+        last_error = _default_no_data_error(kind)
 
     if kind == "network":
         har_payload, har_err = _export_trace_har(trace_path)
@@ -859,8 +1028,6 @@ def _trace_summary(trace_path, kind, process_name=None, process_bundle_id=None):
     except Exception as exc:
         toc_err = str(exc)
     if toc_err:
-        if kind == "network":
-            return None
         return {"error": toc_err, "health": health}
     candidate_schemas = _find_candidate_schemas(toc_xml, keywords, preferred_schemas=preferred)
     if not candidate_schemas:
@@ -872,6 +1039,12 @@ def _trace_summary(trace_path, kind, process_name=None, process_bundle_id=None):
             continue
         if kind == "network":
             summary = _summarize_network_table(
+                table_xml,
+                process_name=process_name,
+                process_bundle_id=process_bundle_id,
+            )
+        elif kind == "cpu" and schema == "time-sample":
+            summary = _summarize_time_sample_table(
                 table_xml,
                 process_name=process_name,
                 process_bundle_id=process_bundle_id,
@@ -888,11 +1061,11 @@ def _trace_summary(trace_path, kind, process_name=None, process_bundle_id=None):
             summary = _curate_network_summary(summary)
         if summary:
             return {"schema": schema, "summary": summary, "health": health}
-        last_error = "no numeric summary extracted"
+        last_error = _default_no_data_error(kind)
     if kind == "network" and last_error and "ReportMemoryException" in last_error:
-        return None
+        last_error = "network export hit ReportMemoryException"
     return {
-        "error": last_error or "no numeric summary extracted",
+        "error": last_error or _default_no_data_error(kind),
         "schema": candidate_schemas[0],
         "health": health,
     }
@@ -1008,6 +1181,21 @@ def _parse_perf_lines(log_path):
     return timings
 
 
+TEST_NAME_TO_SCENARIO = {
+    "testColdLaunchTime": "ColdLaunch",
+    "testWarmResumeTime": "WarmResume",
+    "testLoginSpeed": "Login",
+    "testTabSwitchJourney": "TabSwitchJourney",
+    "testSearchSpeed": "Search",
+    "testImageLoading": "ImageLoading",
+    "testRadioPlayStart": "RadioPlayStart",
+    "testRadioScrollPerformance": "RadioScroll",
+    "testPodcastTabLoad": "PodcastPlayStart",
+    "testPlaylistLoad": "PlaylistPlayStart",
+    "testLogoutSpeed": "Logout",
+}
+
+
 def _detect_tested_app(log_path):
     if not log_path or not os.path.exists(log_path):
         return {"key": "", "bundle_id": "", "label": "App tested"}
@@ -1052,6 +1240,74 @@ def _summarize_perf_entries(entries):
             "iterations": [item.get("iteration") for item in runs],
         }
     return summary
+
+
+def _scenario_key_for_name(name):
+    value = (name or "").strip()
+    if not value:
+        return None
+    if value in TEST_NAME_TO_SCENARIO:
+        return TEST_NAME_TO_SCENARIO[value]
+
+    lowered = value.lower()
+    compact = re.sub(r"[^a-z0-9]+", "", lowered)
+    for scenario in SCENARIO_DEFS:
+        if lowered == scenario["key"].lower():
+            return scenario["key"]
+        if compact == re.sub(r"[^a-z0-9]+", "", scenario["label"].lower()):
+            return scenario["key"]
+        for token in scenario.get("match", []):
+            token_compact = re.sub(r"[^a-z0-9]+", "", str(token).lower())
+            if compact == token_compact:
+                return scenario["key"]
+    return None
+
+
+def _parse_scenario_statuses(log_path):
+    statuses = {}
+    if not log_path or not os.path.exists(log_path):
+        return statuses
+
+    status_re = re.compile(r"^PERF_STATUS\s+iteration=(\d+)/(\d+)\s+metric=(.+?)\s+state=(started|finished)$")
+    skip_re = re.compile(r"^PERF_SKIP\s+iteration=(\d+)/(\d+)\s+metric=(.+?)\s+reason=(.+)$")
+    failed_test_re = re.compile(r"^Test Case '-\[[^\]]+\s+(test[A-Za-z0-9_]+)\]' failed")
+
+    def ensure_entry(key):
+        return statuses.setdefault(key, {"status": "started", "reason": ""})
+
+    with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            stripped = line.strip()
+
+            match = status_re.search(stripped)
+            if match:
+                key = _scenario_key_for_name(match.group(3))
+                if key:
+                    entry = ensure_entry(key)
+                    state = match.group(4)
+                    if state == "finished" and entry.get("status") not in {"failed", "skipped"}:
+                        entry["status"] = "finished"
+                continue
+
+            match = skip_re.search(stripped)
+            if match:
+                key = _scenario_key_for_name(match.group(3))
+                if key:
+                    entry = ensure_entry(key)
+                    entry["status"] = "skipped"
+                    entry["reason"] = match.group(4)
+                continue
+
+            match = failed_test_re.search(stripped)
+            if match:
+                key = _scenario_key_for_name(match.group(1))
+                if key:
+                    entry = ensure_entry(key)
+                    entry["status"] = "failed"
+                    if not entry.get("reason"):
+                        entry["reason"] = "test_failed"
+
+    return statuses
 
 
 def _discover_xcresults(root_path):
@@ -1379,11 +1635,13 @@ def _select_trace_metrics(summary, hints):
     return [{"name": metric_name, "stats": stats} for _, metric_name, stats in scored[:3]]
 
 
-def _build_scenario_cards(custom_summary, trace_summaries):
+def _build_scenario_cards(custom_summary, trace_summaries, scenario_statuses=None):
     cards = []
+    scenario_statuses = scenario_statuses or {}
     for scenario in SCENARIO_DEFS:
         stats = custom_summary.get(scenario["key"])
-        if not stats:
+        status_info = scenario_statuses.get(scenario["key"]) or {}
+        if not stats and not status_info:
             continue
         instruments = []
         for trace_name, info in (trace_summaries or {}).items():
@@ -1397,13 +1655,23 @@ def _build_scenario_cards(custom_summary, trace_summaries):
                         "error": info.get("error"),
                     }
                 )
+        timing = stats or {
+            "mean": "NA",
+            "min": "NA",
+            "max": "NA",
+            "count": "NA",
+        }
+        scenario_status = status_info.get("status") or ("finished" if stats else "unknown")
+        scenario_reason = status_info.get("reason") or ""
         cards.append(
             {
                 "key": scenario["key"],
                 "label": scenario["label"],
                 "description": scenario.get("description", ""),
-                "timing": stats,
+                "timing": timing,
                 "instruments": instruments,
+                "status": scenario_status,
+                "status_reason": scenario_reason,
             }
         )
     return cards
@@ -1612,7 +1880,11 @@ def _write_text(path, payload):
             mean = timing.get("mean")
             min_v = timing.get("min")
             max_v = timing.get("max")
-            lines.append(f"- {card.get('label')}: time={mean:.3f}s min={min_v:.3f}s max={max_v:.3f}s")
+            try:
+                timing_line = f"time={float(mean):.3f}s min={float(min_v):.3f}s max={float(max_v):.3f}s"
+            except Exception:
+                timing_line = f"time={mean} min={min_v} max={max_v}"
+            lines.append(f"- {card.get('label')}: {timing_line}")
             if card.get("description"):
                 lines.append(f"  Measures: {card.get('description')}")
             instruments = card.get("instruments") or []
@@ -1751,12 +2023,20 @@ def _write_csv(path, payload):
         if scenario_cards:
             for card in scenario_cards:
                 timing = card.get("timing") or {}
+                status = (card.get("status") or "").lower()
+                if status in {"failed", "skipped"} and timing.get("mean") == "NA":
+                    mean = min_value = max_value = runs = "NA"
+                else:
+                    mean = _fmt_num(timing.get("mean"))
+                    min_value = _fmt_num(timing.get("min"))
+                    max_value = _fmt_num(timing.get("max"))
+                    runs = timing.get("count", 0)
                 writer.writerow([
                     card.get("label", ""),
-                    _fmt_num(timing.get("mean")),
-                    _fmt_num(timing.get("min")),
-                    _fmt_num(timing.get("max")),
-                    timing.get("count", 0),
+                    mean,
+                    min_value,
+                    max_value,
+                    runs,
                 ])
         else:
             for metric, stats in summary.items():
@@ -1820,6 +2100,12 @@ def _write_html(path, payload):
     def _fmt(v):
         try:
             return f"{float(v):.3f}"
+        except Exception:
+            return str(v)
+
+    def _fmt_time(v):
+        try:
+            return f"{float(v):.3f}s"
         except Exception:
             return str(v)
 
@@ -1898,11 +2184,14 @@ def _write_html(path, payload):
             html.append(f"<h2>{card.get('label')}</h2>")
             if card.get("description"):
                 html.append(f"<div class='scenario-desc'>{_html_escape(card.get('description'))}</div>")
-            html.append(f"<div class='scenario-time'>{_fmt(timing.get('mean'))}s</div>")
+            html.append(f"<div class='scenario-time'>{_html_escape(_fmt_time(timing.get('mean')))}</div>")
+            if card.get("status") in {"failed", "skipped"}:
+                status_reason = card.get("status_reason") or card.get("status")
+                html.append(f"<div class='error-box'>Scenario reported as {_html_escape(card.get('status'))}. {_html_escape(status_reason)}</div>")
             html.append("<div class='kv'>")
             html.append(f"<div class='kv-box'><div class='kv-label'>Runs</div><div class='kv-value'>{timing.get('count', 0)}</div></div>")
-            html.append(f"<div class='kv-box'><div class='kv-label'>Min</div><div class='kv-value'>{_fmt(timing.get('min'))}s</div></div>")
-            html.append(f"<div class='kv-box'><div class='kv-label'>Max</div><div class='kv-value'>{_fmt(timing.get('max'))}s</div></div>")
+            html.append(f"<div class='kv-box'><div class='kv-label'>Min</div><div class='kv-value'>{_html_escape(_fmt_time(timing.get('min')))}</div></div>")
+            html.append(f"<div class='kv-box'><div class='kv-label'>Max</div><div class='kv-value'>{_html_escape(_fmt_time(timing.get('max')))}</div></div>")
             html.append("</div>")
             html.append("<div class='metric-list'>")
             if instruments:
@@ -2141,6 +2430,7 @@ def main():
         "custom_timing_runs": _parse_perf_lines(args.log),
         "custom_timings_summary": {},
         "custom_timings": {},
+        "scenario_statuses": _parse_scenario_statuses(args.log),
         "xc_metrics": {},
         "launch_metrics": [],
         "failures": [],
@@ -2289,6 +2579,7 @@ def main():
     payload["scenario_cards"] = _build_scenario_cards(
         payload["custom_timings_summary"],
         payload["trace_summaries"],
+        payload.get("scenario_statuses"),
     )
 
     # Logo path (place logo at ../assets/performace_logo.png or .svg)

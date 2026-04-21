@@ -1007,7 +1007,7 @@ merge_iteration_results() {
 run_xcodebuild_iteration() {
   local iteration="$1"
   local total_iterations="$2"
-  local login_phase_succeeded=0
+  local login_phase_failed=0
   local iteration_exit=0
 
   echo "" | tee -a "$LOG_PATH"
@@ -1032,17 +1032,19 @@ run_xcodebuild_iteration() {
   if [ "${#ACCOUNT_TEST_ARGS[@]}" -gt 0 ]; then
     if ! run_xcodebuild_phase "$iteration" "$total_iterations" "login" "Running Login Test" "${ACCOUNT_TEST_ARGS[@]}"; then
       iteration_exit=1
-      echo "⚠️ Login phase failed for iteration ${iteration}/${total_iterations}. Skipping content phase." | tee -a "$LOG_PATH"
+      login_phase_failed=1
+      echo "⚠️ Login phase failed for iteration ${iteration}/${total_iterations}. Continuing content phase so remaining scenarios can still run." | tee -a "$LOG_PATH"
     else
-      login_phase_succeeded=1
       LOGIN_SUCCEEDED_AT_LEAST_ONCE=1
     fi
   elif [ "${#CONTENT_TEST_ARGS[@]}" -gt 0 ]; then
-    login_phase_succeeded=1
     LOGIN_SUCCEEDED_AT_LEAST_ONCE=1
   fi
 
-  if [ "${#CONTENT_TEST_ARGS[@]}" -gt 0 ] && [ "$login_phase_succeeded" -eq 1 ]; then
+  if [ "${#CONTENT_TEST_ARGS[@]}" -gt 0 ]; then
+    if [ "$login_phase_failed" -eq 1 ]; then
+      echo "ℹ️ Content tests will attempt their own login/setup after the dedicated login phase failure." | tee -a "$LOG_PATH"
+    fi
     if ! run_xcodebuild_phase "$iteration" "$total_iterations" "content" "Running Content Tests" "${CONTENT_TEST_ARGS[@]}"; then
       iteration_exit=1
       echo "⚠️ Content phase failed for iteration ${iteration}/${total_iterations}." | tee -a "$LOG_PATH"
@@ -1104,16 +1106,17 @@ rm -rf \
 # 6. REQUIRED INSTRUMENTS PASS (Activity, CPU, Memory, Leaks, Network)
 if [ "${INSTRUMENTS:-0}" -eq 1 ]; then
   if [ "${XCODEBUILD_EXIT:-0}" -ne 0 ]; then
-    if [ "${ALLOW_STANDALONE_INSTRUMENTS_AFTER_TEST_FAILURE:-0}" -eq 1 ]; then
-      echo "⚠️ Tests failed, but continuing with standalone Instruments capture because ALLOW_STANDALONE_INSTRUMENTS_AFTER_TEST_FAILURE=1." | tee -a "$LOG_PATH"
-    else
-      echo "ℹ️ Skipping standalone Instruments because the test build/run failed." | tee -a "$LOG_PATH"
-      if [ -n "$BUILD_FAILURE_REASON" ]; then
-        echo "   Fix the build/signing issue first, or rerun with ALLOW_STANDALONE_INSTRUMENTS_AFTER_TEST_FAILURE=1 to force trace collection." | tee -a "$LOG_PATH"
+    if [ -n "${BUILD_FAILURE_REASON:-}" ]; then
+      if [ "${ALLOW_STANDALONE_INSTRUMENTS_AFTER_TEST_FAILURE:-0}" -eq 1 ]; then
+        echo "⚠️ Build/signing failed, but continuing with standalone Instruments capture because ALLOW_STANDALONE_INSTRUMENTS_AFTER_TEST_FAILURE=1." | tee -a "$LOG_PATH"
       else
-        echo "   Rerun with ALLOW_STANDALONE_INSTRUMENTS_AFTER_TEST_FAILURE=1 if you explicitly want traces after a failed test pass." | tee -a "$LOG_PATH"
+        echo "ℹ️ Skipping standalone Instruments because the test build/run failed." | tee -a "$LOG_PATH"
+        echo "   Fix the build/signing issue first, or rerun with ALLOW_STANDALONE_INSTRUMENTS_AFTER_TEST_FAILURE=1 to force trace collection." | tee -a "$LOG_PATH"
+        INSTRUMENTS=0
       fi
-      INSTRUMENTS=0
+    else
+      echo "⚠️ One or more test phases failed, but continuing with standalone Instruments capture so traces are still collected." | tee -a "$LOG_PATH"
+      echo "   Failed scenarios will appear as NA in the report when no timing metric was emitted." | tee -a "$LOG_PATH"
     fi
   fi
 fi
@@ -1408,19 +1411,17 @@ PY
     if [ ! -d "$TRACE_DIR/Network.trace" ]; then
       return 1
     fi
-    local export_timeout="${INSTRUMENTS_EXPORT_TIMEOUT_SECS:-25}"
-
-    run_xctrace_export \
-      "$export_timeout" \
+    export_trace_table_preference \
+      "$TRACE_DIR/Network.trace" \
       "$TRACE_DIR/Network.task-intervals.xml" \
       "$TRACE_DIR/Network.export.log" \
-      xcrun xctrace export \
-        --input "$TRACE_DIR/Network.trace" \
-        --xpath "/trace-toc/run[@number='1']/data/table[@schema='com-apple-cfnetwork-task-intervals']" || true
+      "com-apple-cfnetwork-transaction-intervals-full-info" \
+      "com-apple-cfnetwork-task-intervals" \
+      "com-apple-cfnetwork-transaction-intervals" || true
 
     HAR_EXPORT_DIR="$(mktemp -d /tmp/perf_network_har_XXXXXX)"
     if run_xctrace_export \
-      "$export_timeout" \
+      "${INSTRUMENTS_EXPORT_TIMEOUT_SECS:-25}" \
       "/dev/null" \
       "$TRACE_DIR/Network.export.log" \
       xcrun xctrace export \
@@ -1557,7 +1558,7 @@ PY
         xcrun xctrace export \
           --input "$trace_path" \
           --xpath "/trace-toc/run[@number='1']/data/table[@schema='${schema}']"; then
-        if [ -s "$output_path" ] && grep -Eq "<(row|table|trace-query-result)" "$output_path"; then
+        if [ -s "$output_path" ] && grep -q "<row" "$output_path"; then
           echo "$schema" >> "$log_path"
           return 0
         fi
@@ -1586,6 +1587,7 @@ PY
       "$TRACE_DIR/TimeProfiler.trace" \
       "$TRACE_DIR/TimeProfiler.table.xml" \
       "$TRACE_DIR/TimeProfiler.export.log" \
+      "time-sample" \
       "time-profile" \
       "com.apple.xray.instrument-type.time-profiler" \
       "com.apple.xray.time-profiler" \
