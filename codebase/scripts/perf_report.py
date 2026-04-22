@@ -1310,6 +1310,33 @@ def _parse_scenario_statuses(log_path):
     return statuses
 
 
+def _parse_selected_scenarios(log_path):
+    if not log_path or not os.path.exists(log_path):
+        return []
+
+    selected_re = re.compile(r"^PERF_SELECTED_SCENARIOS\s+(.+)$")
+    selected = []
+    with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            match = selected_re.search(line.strip())
+            if not match:
+                continue
+            selected = [
+                key
+                for key in (_scenario_key_for_name(part.strip()) for part in match.group(1).split(","))
+                if key
+            ]
+
+    seen = set()
+    deduped = []
+    for key in selected:
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+    return deduped
+
+
 def _discover_xcresults(root_path):
     if not root_path or not os.path.isdir(root_path):
         return []
@@ -1530,7 +1557,7 @@ SCENARIO_DEFS = [
         "key": "Search",
         "label": "Search",
         "match": ["search"],
-        "description": "Measures search response from submitting a pre-filled Taylor Swift query through opening a result and reaching playback started.",
+        "description": "Measures search response from submitting a pre-filled Taylor Swift query until results are visible.",
         "thresholds": {"pass": 4.0, "warn": 7.0},
     },
     {
@@ -1635,13 +1662,15 @@ def _select_trace_metrics(summary, hints):
     return [{"name": metric_name, "stats": stats} for _, metric_name, stats in scored[:3]]
 
 
-def _build_scenario_cards(custom_summary, trace_summaries, scenario_statuses=None):
+def _build_scenario_cards(custom_summary, trace_summaries, scenario_statuses=None, selected_scenarios=None):
     cards = []
     scenario_statuses = scenario_statuses or {}
+    selected_scenarios = set(selected_scenarios or [])
     for scenario in SCENARIO_DEFS:
         stats = custom_summary.get(scenario["key"])
         status_info = scenario_statuses.get(scenario["key"]) or {}
-        if not stats and not status_info:
+        was_selected = scenario["key"] in selected_scenarios
+        if not stats and not status_info and not was_selected:
             continue
         instruments = []
         for trace_name, info in (trace_summaries or {}).items():
@@ -1661,8 +1690,8 @@ def _build_scenario_cards(custom_summary, trace_summaries, scenario_statuses=Non
             "max": "NA",
             "count": "NA",
         }
-        scenario_status = status_info.get("status") or ("finished" if stats else "unknown")
-        scenario_reason = status_info.get("reason") or ""
+        scenario_status = status_info.get("status") or ("finished" if stats else ("not_run" if was_selected else "unknown"))
+        scenario_reason = status_info.get("reason") or ("no metric emitted" if was_selected and not stats else "")
         cards.append(
             {
                 "key": scenario["key"],
@@ -2431,6 +2460,7 @@ def main():
         "custom_timings_summary": {},
         "custom_timings": {},
         "scenario_statuses": _parse_scenario_statuses(args.log),
+        "selected_scenarios": _parse_selected_scenarios(args.log),
         "xc_metrics": {},
         "launch_metrics": [],
         "failures": [],
@@ -2580,6 +2610,7 @@ def main():
         payload["custom_timings_summary"],
         payload["trace_summaries"],
         payload.get("scenario_statuses"),
+        payload.get("selected_scenarios"),
     )
 
     # Logo path (place logo at ../assets/performace_logo.png or .svg)

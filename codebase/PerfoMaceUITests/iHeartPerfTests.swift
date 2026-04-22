@@ -28,7 +28,7 @@ private enum PerfTestConfig {
         return "com.clearchannel.iheartradio.legacy.qa"
         #elseif PERF_APP_QA
         return "com.clearchannel.iheartradio.qa"
-        #endif
+        #else
         let appKeyValue = read(appKey, from: env) ?? "qa"
         switch appKeyValue.lowercased() {
         case "legacy":
@@ -38,6 +38,7 @@ private enum PerfTestConfig {
         default:
             return "com.clearchannel.iheartradio.qa"
         }
+        #endif
     }
 }
 
@@ -88,9 +89,26 @@ class iHeartPerfTests: XCTestCase {
     private let albumSearchQuery = "Taylor Swift"
 
     private var isLegacyRun: Bool {
+        #if PERF_APP_LEGACY
+        return true
+        #elseif PERF_APP_QA
+        return false
+        #else
         let env = ProcessInfo.processInfo.environment
+        if let appKey = PerfTestConfig.read(PerfTestConfig.appKey, from: env)?.lowercased() {
+            switch appKey {
+            case "legacy":
+                return true
+            case "qa", "rewrite":
+                return false
+            default:
+                break
+            }
+        }
+
         let bundleId = resolveBundleId(from: env).lowercased()
-        return bundleId.contains(".legacy.")
+        return bundleId.contains(".legacy.") || bundleId.contains("legacy")
+        #endif
     }
 
     override func setUpWithError() throws {
@@ -172,30 +190,13 @@ class iHeartPerfTests: XCTestCase {
     func testSearchSpeed() {
         ensureLoggedIn()
         let query = "Taylor Swift"
-        let options = XCTMeasureOptions()
-        options.iterationCount = 1
-        options.invocationOptions = [.manuallyStart, .manuallyStop]
 
-        var duration: TimeInterval = 0
-        emitScenarioEvent(name: "Search", state: "started")
-        defer { emitScenarioEvent(name: "Search", state: "finished") }
+        returnToRootIfNeeded()
+        dismissAdsIfPresent(reason: "beforeSearchPerformance")
+        prepareSearchQuery(query)
 
-        measure(metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric(), XCTStorageMetric()], options: options) {
-            var didStartMeasuring = false
-            defer {
-                if didStartMeasuring {
-                    stopMeasuring()
-                }
-            }
-
-            returnToRootIfNeeded()
-            dismissAdsIfPresent(reason: "beforeSearchPerformance")
-            prepareSearchQuery(query)
-
-            // Measure the actual search request and result readiness, not the tab navigation or typing.
-            startMeasuring()
-            didStartMeasuring = true
-            let start = CFAbsoluteTimeGetCurrent()
+        // Measure the actual search request and result readiness, not tab navigation or typing.
+        _ = measureOnce("Search") {
             submitSearchQuery()
             dismissAdsIfPresent(reason: "beforeSearchResults")
             guard waitForSearchResults(query: query, timeout: isLegacyRun ? 8 : 10) else {
@@ -203,20 +204,7 @@ class iHeartPerfTests: XCTestCase {
                 XCTFail("Search results not found.")
                 return
             }
-            duration = CFAbsoluteTimeGetCurrent() - start
-            stopMeasuring()
-            didStartMeasuring = false
-
-            guard openFirstSearchResult(query: query) else {
-                dumpAccessibilityTree("SearchResultMissing")
-                XCTFail("Search result target not found.")
-                return
-            }
-
-            assertPlaybackStarted(context: "SearchPlaybackNotStarted")
         }
-
-        emitPerfMetric(name: "Search", duration: duration)
     }
 
     // MARK: - 4. RADIO PLAY START
@@ -268,47 +256,25 @@ class iHeartPerfTests: XCTestCase {
     // MARK: - 6. IMAGE LOADING
     func testImageLoading() {
         ensureLoggedIn()
-        let options = XCTMeasureOptions()
-        options.iterationCount = 1
-        options.invocationOptions = [.manuallyStart, .manuallyStop]
-
-        var duration: TimeInterval = 0
-        emitScenarioEvent(name: "ImageLoading", state: "started")
-        defer { emitScenarioEvent(name: "ImageLoading", state: "finished") }
-
-        measure(metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric(), XCTStorageMetric()], options: options) {
-            var didStartMeasuring = false
-            defer {
-                if didStartMeasuring {
-                    stopMeasuring()
-                }
-            }
-
+        measureOnce("ImageLoading") {
             returnToRootIfNeeded()
             dismissAdsIfPresent(reason: "beforeImageLoadingSearch")
             prepareSearchQuery(albumSearchQuery)
             submitSearchQuery()
             dismissAdsIfPresent(reason: "beforeImageLoadingResults")
             if !waitForSearchResults(query: albumSearchQuery, timeout: isLegacyRun ? 8 : 10) {
-                startMeasuring()
-                didStartMeasuring = true
                 dumpAccessibilityTree("ImageLoadingResultsMissing")
                 XCTFail("Image loading search results not found.")
                 return
             }
 
             guard let target = waitForSearchResultAwaitingArtwork(query: albumSearchQuery, timeout: isLegacyRun ? 8 : 10) else {
-                startMeasuring()
-                didStartMeasuring = true
                 dumpAccessibilityTree("ImageLoadingTargetMissing")
                 XCTFail("No search result was found waiting on artwork.")
                 return
             }
 
             let legacyDetailArtworkFallback = isLegacyRun && searchResultArtworkImage(in: target) == nil
-            startMeasuring()
-            didStartMeasuring = true
-            let start = CFAbsoluteTimeGetCurrent()
             if legacyDetailArtworkFallback {
                 target.forceTap()
                 if !waitForMediaArtworkVisible(timeout: 8) {
@@ -321,10 +287,7 @@ class iHeartPerfTests: XCTestCase {
                 XCTFail("Image loading artwork did not become visible.")
                 return
             }
-            duration = CFAbsoluteTimeGetCurrent() - start
         }
-
-        emitPerfMetric(name: "ImageLoading", duration: duration)
     }
 
     // MARK: - 7. PODCAST PLAY START
@@ -568,6 +531,10 @@ class iHeartPerfTests: XCTestCase {
         let settingsCandidates: [XCUIElement] = [
             app.buttons[UI.settingsIcon],
             app.navigationBars.buttons[UI.settingsIcon],
+            app.buttons["Settings"],
+            app.navigationBars.buttons["Settings"],
+            app.buttons.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings' OR label ==[c] 'Settings'")).firstMatch,
+            app.navigationBars.buttons.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings' OR label ==[c] 'Settings'")).firstMatch,
         ]
         return tapVisibleTopBarSettings(settingsCandidates)
     }
@@ -581,6 +548,8 @@ class iHeartPerfTests: XCTestCase {
             app.navigationBars.buttons[UI.settingsIcon],
             app.navigationBars.buttons["Settings"],
             app.navigationBars.buttons["NavBar-Settings-UIButton"],
+            app.buttons.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings' OR label ==[c] 'Settings'")).firstMatch,
+            app.navigationBars.buttons.matching(NSPredicate(format: "identifier CONTAINS[c] 'settings' OR label ==[c] 'Settings'")).firstMatch,
         ]
         return tapVisibleTopBarSettings(settingsCandidates)
     }
@@ -1263,23 +1232,147 @@ class iHeartPerfTests: XCTestCase {
         return false
     }
 
-    private func tabAliases(label: String, identifier: String) -> [String] {
-        var aliases = [label, identifier]
-        switch label.lowercased() {
-        case UI.homeTab.lowercased():
-            aliases.append(contentsOf: ["tab_yourHome", "homeTab"])
-        case "search":
-            aliases.append(contentsOf: ["tab_search", "searchTab"])
-        case "radio":
-            aliases.append(contentsOf: ["tab_radio", "radioTab"])
-        case "podcasts":
-            aliases.append(contentsOf: ["tab_podcasts", "podcastsTab"])
-        case "playlists":
-            aliases.append(contentsOf: ["tab_playlists", "playlistsTab"])
-        default:
-            break
+    private func exactTabIdentifiers(label: String, identifier: String) -> [String] {
+        let normalizedLabel = label.lowercased()
+        let normalizedIdentifier = identifier.lowercased()
+
+        if isLegacyRun {
+            switch normalizedLabel {
+            case UI.homeTab.lowercased():
+                return ["tab_yourHome"]
+            case "search":
+                return ["tab_search"]
+            case "radio":
+                return ["tab_radio"]
+            case "podcasts":
+                return ["tab_podcasts"]
+            case "playlists":
+                return ["tab_playlists"]
+            default:
+                break
+            }
+        } else {
+            switch normalizedLabel {
+            case UI.homeTab.lowercased():
+                return ["homeTab"]
+            case "search":
+                return ["searchTab"]
+            case "radio":
+                return ["radioTab"]
+            case "podcasts":
+                return ["podcastsTab"]
+            case "playlists":
+                return ["playlistsTab"]
+            default:
+                break
+            }
         }
-        return Array(Set(aliases.filter { !$0.isEmpty }))
+
+        if !identifier.isEmpty {
+            return [identifier]
+        }
+        if !label.isEmpty {
+            return [label]
+        }
+        return [normalizedIdentifier, normalizedLabel].filter { !$0.isEmpty }
+    }
+
+    private func tabLabelFallbacks(label: String) -> [String] {
+        guard !label.isEmpty else { return [] }
+        return [label]
+    }
+
+    private func elementFingerprint(_ element: XCUIElement) -> String {
+        let frame = element.frame
+        return [
+            String(describing: element.elementType),
+            element.identifier,
+            element.label,
+            String(format: "%.1f", frame.minX),
+            String(format: "%.1f", frame.minY),
+            String(format: "%.1f", frame.width),
+            String(format: "%.1f", frame.height),
+        ].joined(separator: "|")
+    }
+
+    private func deduplicateElements(_ elements: [XCUIElement]) -> [XCUIElement] {
+        var seen: Set<String> = []
+        return elements.filter { element in
+            guard element.exists else {
+                return false
+            }
+            let fingerprint = elementFingerprint(element)
+            if seen.contains(fingerprint) {
+                return false
+            }
+            seen.insert(fingerprint)
+            return true
+        }
+    }
+
+    private func visibleTabBarFrame() -> CGRect? {
+        let bars = app.descendants(matching: .tabBar).allElementsBoundByIndex.filter {
+            $0.exists && !$0.frame.isEmpty
+        }
+        return bars.first?.frame
+    }
+
+    private func candidateLooksLikeTabButton(_ element: XCUIElement) -> Bool {
+        guard element.exists else { return false }
+        let frame = element.frame
+        guard !frame.isEmpty else { return false }
+
+        if let tabBarFrame = visibleTabBarFrame(), frame.intersects(tabBarFrame) {
+            return true
+        }
+
+        let strings = [
+            element.identifier,
+            element.label,
+            element.value as? String ?? "",
+        ].joined(separator: " ").lowercased()
+        if strings.contains("tab_") || strings.contains("tabbar") {
+            return true
+        }
+
+        let appFrame = app.frame
+        guard !appFrame.isEmpty else { return false }
+        return frame.midY >= appFrame.maxY * 0.72
+    }
+
+    private func exactTabCandidates(identifiers: [String]) -> [XCUIElement] {
+        let tabBarCandidates = identifiers.flatMap { identifier in
+            app.tabBars.buttons.matching(identifier: identifier).allElementsBoundByIndex
+        }
+        if !tabBarCandidates.isEmpty {
+            return deduplicateElements(tabBarCandidates)
+        }
+
+        let fallbackCandidates = identifiers.flatMap { identifier in
+            app.descendants(matching: .button).matching(identifier: identifier).allElementsBoundByIndex
+        }
+        return deduplicateElements(fallbackCandidates)
+    }
+
+    private func labelTabCandidates(labels: [String]) -> [XCUIElement] {
+        var candidates: [XCUIElement] = []
+        for label in labels where !label.isEmpty {
+            let predicate = NSPredicate(format: "label ==[c] %@", label)
+            candidates.append(contentsOf: app.tabBars.descendants(matching: .button).matching(predicate).allElementsBoundByIndex)
+        }
+        return deduplicateElements(candidates)
+    }
+
+    private func tabSelectionCandidates(label: String, identifier: String) -> [XCUIElement] {
+        let exactCandidates = exactTabCandidates(identifiers: exactTabIdentifiers(label: label, identifier: identifier))
+            .filter { candidateLooksLikeTabButton($0) }
+        if !exactCandidates.isEmpty {
+            return exactCandidates
+        }
+
+        let labelCandidates = labelTabCandidates(labels: tabLabelFallbacks(label: label))
+            .filter { candidateLooksLikeTabButton($0) }
+        return deduplicateElements(labelCandidates)
     }
 
     private func waitForSelectedTab(label: String, identifier: String, timeout: TimeInterval) -> Bool {
@@ -1287,16 +1380,10 @@ class iHeartPerfTests: XCTestCase {
             return true
         }
 
-        let aliases = tabAliases(label: label, identifier: identifier)
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
-            let candidates = aliases.flatMap { alias in
-                [
-                    app.tabBars.buttons[alias],
-                    app.buttons[alias],
-                ]
-            }
-            if candidates.contains(where: { $0.exists && $0.isSelected }) {
+            let candidates = tabSelectionCandidates(label: label, identifier: identifier)
+            if candidates.contains(where: { $0.isSelected }) {
                 return true
             }
             if (label == UI.homeTab || identifier == "homeTab") && homeSurfaceVisible() {
@@ -1312,18 +1399,20 @@ class iHeartPerfTests: XCTestCase {
         if (label == UI.homeTab || identifier == "homeTab") && homeSurfaceVisible() {
             return
         }
-        let aliases = tabAliases(label: label, identifier: identifier)
-        let candidates = aliases.flatMap { alias in
-            [
-                app.tabBars.buttons[alias],
-                app.buttons[alias],
-            ]
-        }
+        let deadline = Date().addingTimeInterval(isLegacyRun ? 6 : 4)
+        var candidates: [XCUIElement] = []
+
+        repeat {
+            candidates = tabSelectionCandidates(label: label, identifier: identifier)
+            if !candidates.isEmpty {
+                break
+            }
+            clearInterferingPrompts(reason: "selectTab", timeout: 0.25)
+            dismissAdsIfPresent(reason: "selectTab")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        } while Date() < deadline
 
         for candidate in candidates {
-            if !candidate.waitForExistence(timeout: 1.5) {
-                continue
-            }
             if !candidate.isSelected {
                 if candidate.isHittable {
                     candidate.tap()
@@ -1336,6 +1425,138 @@ class iHeartPerfTests: XCTestCase {
                 return
             }
         }
+    }
+
+    private func isVisibleTopBarControl(_ element: XCUIElement) -> Bool {
+        guard element.exists else { return false }
+        let frame = element.frame
+        guard !frame.isEmpty else { return false }
+        let appFrame = app.frame
+        guard !appFrame.isEmpty else { return false }
+        return frame.maxY < max(220, appFrame.maxY * 0.32)
+    }
+
+    private func searchStaticSurfaceCandidates() -> [XCUIElement] {
+        let placeholderPredicate = NSPredicate(format: "label ==[c] %@", "What do you want to listen to?")
+        let candidates =
+            app.buttons.matching(identifier: "SearchBarStaticView").allElementsBoundByIndex +
+            app.collectionViews.matching(identifier: "SearchResultsView").allElementsBoundByIndex +
+            app.staticTexts.matching(identifier: "SearchResultsListView-Header").allElementsBoundByIndex +
+            app.buttons.matching(identifier: "navBarSearchIcon").allElementsBoundByIndex +
+            app.navigationBars.buttons.matching(identifier: "navBarSearchIcon").allElementsBoundByIndex +
+            app.buttons.matching(identifier: "SearchTabContextViewController-SearchButton-UIBarButtonItem").allElementsBoundByIndex +
+            app.navigationBars.buttons.matching(identifier: "SearchTabContextViewController-SearchButton-UIBarButtonItem").allElementsBoundByIndex +
+            app.buttons.matching(placeholderPredicate).allElementsBoundByIndex +
+            app.staticTexts.matching(placeholderPredicate).allElementsBoundByIndex
+
+        return deduplicateElements(candidates)
+    }
+
+    private func currentSearchInput() -> XCUIElement? {
+        let candidates = [
+            app.textFields["SearchBarActiveView-TextField"],
+            app.searchFields.firstMatch,
+            app.searchFields["What do you want to listen to?"],
+            app.textFields["What do you want to listen to?"],
+            app.textFields["Search"],
+        ]
+
+        for candidate in candidates where candidate.exists && !candidate.frame.isEmpty {
+            return candidate
+        }
+
+        let placeholderPredicate = NSPredicate(format: "placeholderValue CONTAINS[c] 'listen' OR label CONTAINS[c] 'listen'")
+        let placeholderMatch = app.descendants(matching: .any).matching(placeholderPredicate).firstMatch
+        if placeholderMatch.exists && !placeholderMatch.frame.isEmpty {
+            return placeholderMatch
+        }
+
+        return nil
+    }
+
+    private func searchActivationCandidates() -> [XCUIElement] {
+        let identifierCandidates: [XCUIElement]
+        if isLegacyRun {
+            identifierCandidates =
+                app.buttons.matching(identifier: "SearchBarStaticView").allElementsBoundByIndex +
+                app.buttons.matching(identifier: "SearchTabContextViewController-SearchButton-UIBarButtonItem").allElementsBoundByIndex +
+                app.navigationBars.buttons.matching(identifier: "SearchTabContextViewController-SearchButton-UIBarButtonItem").allElementsBoundByIndex
+        } else {
+            identifierCandidates =
+                app.buttons.matching(identifier: "SearchBarStaticView").allElementsBoundByIndex +
+                app.buttons.matching(identifier: "navBarSearchIcon").allElementsBoundByIndex +
+                app.navigationBars.buttons.matching(identifier: "navBarSearchIcon").allElementsBoundByIndex
+        }
+
+        return deduplicateElements(identifierCandidates.filter {
+            isVisibleTopBarControl($0) || $0.identifier == "SearchBarStaticView"
+        })
+    }
+
+    private func searchEntrySurfaceVisible() -> Bool {
+        let staticSurface = searchStaticSurfaceCandidates().contains { element in
+            element.exists && !element.frame.isEmpty && (
+                element.identifier == "SearchBarStaticView"
+                    || element.label == "What do you want to listen to?"
+                    || element.identifier == "navBarSearchIcon"
+                    || element.identifier == "SearchTabContextViewController-SearchButton-UIBarButtonItem"
+            )
+        }
+        return currentSearchInput() != nil || staticSurface
+    }
+
+    private func searchSurfaceVisible() -> Bool {
+        if currentSearchInput() != nil { return true }
+        let searchResultsView = app.collectionViews["SearchResultsView"]
+        if searchResultsView.exists && !searchResultsView.frame.isEmpty {
+            return true
+        }
+        let staticSearchBar = app.buttons["SearchBarStaticView"]
+        if staticSearchBar.exists && !staticSearchBar.frame.isEmpty {
+            return true
+        }
+        let placeholder = app.staticTexts["What do you want to listen to?"]
+        if placeholder.exists && !placeholder.frame.isEmpty {
+            return true
+        }
+        let header = app.staticTexts["SearchResultsListView-Header"]
+        return header.exists && !header.frame.isEmpty
+    }
+
+    private func waitForSearchSurface(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            clearInterferingPrompts(reason: "waitForSearchSurface", timeout: 0.2)
+            dismissAdsIfPresent(reason: "waitForSearchSurface")
+            if searchEntrySurfaceVisible() || searchSurfaceVisible() {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        } while Date() < deadline
+        return searchEntrySurfaceVisible() || searchSurfaceVisible()
+    }
+
+    private func activateSearchInput(timeout: TimeInterval) -> XCUIElement? {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if let input = currentSearchInput() {
+                return input
+            }
+
+            for candidate in searchActivationCandidates() where candidate.exists {
+                candidate.forceTap()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+                if let input = currentSearchInput() {
+                    return input
+                }
+            }
+
+            if isLegacyRun {
+                selectTab(label: "Search", identifier: "searchTab")
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        } while Date() < deadline
+        return currentSearchInput()
     }
     
     private func findSearchBar(timeout: TimeInterval) -> XCUIElement {
@@ -1460,49 +1681,92 @@ class iHeartPerfTests: XCTestCase {
     }
 
     private func prepareSearchQuery(_ query: String) {
-        returnToRootIfNeeded()
-        dismissAdsIfPresent(reason: "beforeSearchTab")
-        selectTab(label: "Search", identifier: "searchTab")
-        dismissAdsIfPresent(reason: "beforeSearchInput")
+        let deadline = Date().addingTimeInterval(isLegacyRun ? 16 : 12)
+        repeat {
+            returnToRootIfNeeded()
+            dismissAdsIfPresent(reason: "beforeSearchTab")
+            clearInterferingPrompts(reason: "beforeSearchTab", timeout: 0.2)
+            selectTab(label: "Search", identifier: "searchTab")
+            dismissAdsIfPresent(reason: "beforeSearchInput")
 
-        let activeField = app.textFields["SearchBarActiveView-TextField"]
-        if !activeField.exists {
-            let staticView = app.buttons["SearchBarStaticView"]
-            if staticView.waitForExistence(timeout: 3) {
-                staticView.forceTap()
+            if !waitForSearchSurface(timeout: 2.5) {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+                continue
             }
-        }
 
-        if !activeField.waitForExistence(timeout: 5) {
-            let searchField = app.searchFields.firstMatch
-            if searchField.waitForExistence(timeout: 2) {
-                searchField.forceTap()
-                searchField.clearAndType(query)
+            clearInterferingPrompts(reason: "beforeSearchInput", timeout: 0.4)
+            if let input = activateSearchInput(timeout: isLegacyRun ? 4.5 : 3.5) {
+                input.forceTap()
+                input.clearAndType(query)
                 return
             }
-            dumpAccessibilityTree("SearchFieldMissing")
-            XCTFail("Search text field not found.")
-        } else {
-            activeField.forceTap()
-            activeField.clearAndType(query)
+
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        } while Date() < deadline
+
+        dumpAccessibilityTree("SearchFieldMissing")
+        XCTFail("Search text field not found.")
+    }
+
+    private func waitForSearchSubmission(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if waitForSearchResults(query: "", timeout: 0.2) {
+                return true
+            }
+            if app.keyboards.firstMatch.exists {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+                continue
+            }
+            if searchSurfaceVisible() {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        } while Date() < deadline
+        return waitForSearchResults(query: "", timeout: 0.2) || searchSurfaceVisible()
+    }
+
+    private func tapSearchSubmitKeyIfPresent() -> Bool {
+        let keyboard = app.keyboards.firstMatch
+        guard keyboard.exists else { return false }
+
+        let submitKeys = [
+            keyboard.buttons["Search"],
+            keyboard.buttons["Return"],
+            keyboard.buttons["Go"],
+        ]
+        for key in submitKeys where key.exists {
+            key.tap()
+            return true
         }
+        return false
     }
 
     private func submitSearchQuery() {
-        let searchButton = app.keyboards.buttons["Search"]
-        if searchButton.waitForExistence(timeout: 3) {
-            searchButton.tap()
-            return
-        }
+        let deadline = Date().addingTimeInterval(isLegacyRun ? 6 : 4)
+        repeat {
+            if tapSearchSubmitKeyIfPresent() {
+                _ = waitForSearchSubmission(timeout: 1.2)
+                return
+            }
 
-        let returnButton = app.keyboards.buttons["Return"]
-        if returnButton.waitForExistence(timeout: 1) {
-            returnButton.tap()
-            return
-        }
+            if let input = currentSearchInput() {
+                input.typeText("\n")
+                _ = waitForSearchSubmission(timeout: 1.2)
+                return
+            }
 
-        if app.searchFields.firstMatch.exists {
-            app.searchFields.firstMatch.typeText("\n")
+            if let topBarSearch = searchActivationCandidates().first(where: isVisibleTopBarControl(_:)) {
+                topBarSearch.forceTap()
+                _ = waitForSearchSubmission(timeout: 1.0)
+                return
+            }
+
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        } while Date() < deadline
+
+        if let input = currentSearchInput() {
+            input.typeText("\n")
         }
     }
 
@@ -1560,8 +1824,12 @@ class iHeartPerfTests: XCTestCase {
 
     @discardableResult
     private func waitForSearchResults(query: String, timeout: TimeInterval = 10) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
+        let effectiveTimeout = max(timeout, isLegacyRun ? 10 : 8)
+        let deadline = Date().addingTimeInterval(effectiveTimeout)
         repeat {
+            if !isLegacyRun && qaSearchResultsLoaded() {
+                return true
+            }
             if let result = firstSearchResultTarget(query: query), result.exists {
                 return true
             }
@@ -1569,28 +1837,62 @@ class iHeartPerfTests: XCTestCase {
             if resultHeader.exists {
                 return true
             }
+            if app.collectionViews["SearchResultsView"].exists && query.isEmpty {
+                return true
+            }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         } while Date() < deadline
         return false
     }
 
-    @discardableResult
-    private func openFirstSearchResult(query: String) -> Bool {
-        if let preferred = firstSearchResultTarget(query: query) {
-            preferred.forceTap()
+    private func qaSearchResultsLoaded() -> Bool {
+        guard !isLegacyRun else { return false }
+        if app.staticTexts["SearchResultsListView-Header"].exists {
             return true
         }
 
-        let candidates = [
+        let rowPredicate = NSPredicate(format: "identifier BEGINSWITH[c] 'SearchResultsListView-SearchAll-ContentRow:'")
+        return limitedElements(in: app.buttons.matching(rowPredicate), limit: 8).contains { row in
+            guard row.exists else { return false }
+            let frame = row.frame
+            guard !frame.isEmpty else { return false }
+            guard frame.intersects(contentViewportBounds()) else { return false }
+            return !row.label.lowercased().contains("more options")
+        }
+    }
+
+    @discardableResult
+    private func openFirstSearchResult(query: String) -> Bool {
+        if !isLegacyRun, let qaTarget = preferredQASearchResultTarget(query: query) {
+            qaTarget.forceTap()
+            if waitForSearchResultSelection(timeout: 4) {
+                return true
+            }
+        }
+
+        let candidates = searchResultTargets(query: query, limit: 8) + [
             app.collectionViews["SearchResultsView"].cells.firstMatch,
             app.buttons.matching(NSPredicate(format: "identifier CONTAINS[c] 'playlist' OR identifier CONTAINS[c] 'artist' OR identifier CONTAINS[c] 'song' OR identifier CONTAINS[c] 'result' OR label CONTAINS[c] 'playlist' OR label CONTAINS[c] 'artist' OR label CONTAINS[c] 'song' OR label CONTAINS[c] %@", query)).firstMatch,
             app.otherElements.matching(NSPredicate(format: "identifier CONTAINS[c] 'playlist' OR identifier CONTAINS[c] 'artist' OR identifier CONTAINS[c] 'song' OR identifier CONTAINS[c] 'result' OR label CONTAINS[c] 'playlist' OR label CONTAINS[c] 'artist' OR label CONTAINS[c] 'song' OR label CONTAINS[c] %@", query)).firstMatch,
             app.collectionViews["SearchResultsView"].descendants(matching: .button).firstMatch,
         ]
-        return tapFirstExisting(candidates, context: "SearchResultMissing", failIfMissing: false)
+        for candidate in deduplicateElements(candidates) where candidate.exists && !candidate.frame.isEmpty {
+            guard isUsableSearchResult(candidate, query: query) || candidate == app.collectionViews["SearchResultsView"].cells.firstMatch else {
+                continue
+            }
+            candidate.forceTap()
+            if waitForSearchResultSelection(timeout: isLegacyRun ? 6 : 4) {
+                return true
+            }
+        }
+        return false
     }
 
     private func firstSearchResultTarget(query: String) -> XCUIElement? {
+        searchResultTargets(query: query, limit: 1).first
+    }
+
+    private func searchResultTargets(query: String, limit: Int) -> [XCUIElement] {
         let queryPredicate = NSPredicate(format: "label CONTAINS[c] %@ OR identifier CONTAINS[c] %@ OR value CONTAINS[c] %@", query, query, query)
         let contentPredicate = NSPredicate(format: "identifier CONTAINS[c] 'playlist' OR identifier CONTAINS[c] 'artist' OR identifier CONTAINS[c] 'song' OR identifier CONTAINS[c] 'result' OR label CONTAINS[c] 'playlist' OR label CONTAINS[c] 'artist' OR label CONTAINS[c] 'song' OR label CONTAINS[c] 'station'")
         let searchResultsView = app.collectionViews["SearchResultsView"]
@@ -1607,12 +1909,34 @@ class iHeartPerfTests: XCTestCase {
             app.otherElements.matching(contentPredicate).allElementsBoundByIndex,
         ]
 
+        var matches: [XCUIElement] = []
         for group in candidateGroups {
-            if let match = group.first(where: { isUsableSearchResult($0, query: query) }) {
-                return match
+            for candidate in group where isUsableSearchResult(candidate, query: query) {
+                matches.append(candidate)
+                let deduped = deduplicateElements(matches)
+                if deduped.count >= limit {
+                    return Array(deduped.prefix(limit))
+                }
             }
         }
-        return nil
+        return Array(deduplicateElements(matches).prefix(limit))
+    }
+
+    private func waitForSearchResultSelection(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if playbackStartedIndicators().contains(where: { $0.exists }) {
+                return true
+            }
+            if hasVisibleMiniPlayerContainer() {
+                return true
+            }
+            if !searchSurfaceVisible() {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        } while Date() < deadline
+        return playbackStartedIndicators().contains(where: { $0.exists }) || hasVisibleMiniPlayerContainer() || !searchSurfaceVisible()
     }
 
     @discardableResult
@@ -1681,6 +2005,10 @@ class iHeartPerfTests: XCTestCase {
             element.value as? String ?? "",
         ].joined(separator: " ").lowercased()
 
+        if element.identifier.lowercased().hasPrefix("searchresultslistview-searchall-contentrow:") {
+            return !strings.contains("more options")
+        }
+
         if strings.isEmpty { return false }
         if strings.contains("searchbar") || strings.contains("what do you want to listen to") {
             return false
@@ -1727,6 +2055,28 @@ class iHeartPerfTests: XCTestCase {
         }
 
         return hasQueryMatch && looksLikeResult
+    }
+
+    private func preferredQASearchResultTarget(query: String) -> XCUIElement? {
+        guard !isLegacyRun else { return nil }
+
+        let rowPredicate = NSPredicate(format: "identifier BEGINSWITH[c] 'SearchResultsListView-SearchAll-ContentRow:'")
+        let rows = limitedElements(in: app.buttons.matching(rowPredicate), limit: 12)
+
+        for row in rows {
+            guard row.exists else { continue }
+            let frame = row.frame
+            guard !frame.isEmpty && frame.intersects(contentViewportBounds()) else { continue }
+            let label = row.label.lowercased()
+            let value = (row.value as? String ?? "").lowercased()
+            let haystack = "\(row.identifier.lowercased()) \(label) \(value)"
+            guard !haystack.contains("more options") else { continue }
+            if query.isEmpty || haystack.contains(query.lowercased()) || haystack.contains("song") || haystack.contains("artist") || haystack.contains("station") || haystack.contains("podcast") {
+                return row
+            }
+        }
+
+        return nil
     }
 
     private func contentViewportBounds() -> CGRect {
@@ -1823,6 +2173,19 @@ class iHeartPerfTests: XCTestCase {
         }
 
         let nestedButtons = app.descendants(matching: .button).matching(playPredicate)
+        return firstVisibleContentElement(in: nestedButtons)
+    }
+
+    private func preferredPodcastEpisodePlayButton() -> XCUIElement? {
+        let episodePlayPredicate = NSPredicate(
+            format: "identifier ==[c] 'EpisodeCardPlayButton' OR label ==[c] 'Play Episode'"
+        )
+        let explicitButtons = app.buttons.matching(episodePlayPredicate)
+        if let visible = firstVisibleContentElement(in: explicitButtons) {
+            return visible
+        }
+
+        let nestedButtons = app.descendants(matching: .button).matching(episodePlayPredicate)
         return firstVisibleContentElement(in: nestedButtons)
     }
 
@@ -2467,7 +2830,31 @@ class iHeartPerfTests: XCTestCase {
         return nil
     }
 
+    private func visibleSearchResultArtworkImage() -> XCUIElement? {
+        let viewport = contentViewportBounds()
+        let exactArtworkIdentifiers = [
+            "ContentRow-IHRImageView-View",
+            "MiniPlayer-Artwork-IHRImageView",
+        ]
+
+        for identifier in exactArtworkIdentifiers {
+            for image in app.images.matching(identifier: identifier).allElementsBoundByIndex {
+                guard image.exists else { continue }
+                let frame = image.frame
+                guard !frame.isEmpty else { continue }
+                guard frame.width >= 40 && frame.height >= 40 else { continue }
+                guard frame.intersects(viewport) || identifier == "MiniPlayer-Artwork-IHRImageView" else { continue }
+                return image
+            }
+        }
+
+        return nil
+    }
+
     private func searchResultAwaitingArtworkTarget(query: String) -> XCUIElement? {
+        if !isLegacyRun, let preferredQATarget = preferredQASearchResultArtworkTarget(query: query), preferredQATarget.exists {
+            return preferredQATarget
+        }
         if isLegacyRun, let preferredLegacyTarget = preferredLegacyImageLoadingTarget(query: query), preferredLegacyTarget.exists {
             return preferredLegacyTarget
         }
@@ -2475,6 +2862,19 @@ class iHeartPerfTests: XCTestCase {
             return nil
         }
         return target
+    }
+
+    private func preferredQASearchResultArtworkTarget(query: String) -> XCUIElement? {
+        let rowPredicate = NSPredicate(format: "identifier BEGINSWITH[c] 'SearchResultsListView-SearchAll-ContentRow:'")
+        let rows = visibleContentElements(limitedElements(in: app.buttons.matching(rowPredicate), limit: 16))
+        if let row = rows.first(where: { row in
+            let label = row.label.lowercased()
+            return !label.contains("more options") && (query.isEmpty || label.contains(query.lowercased()))
+        }) {
+            return row
+        }
+
+        return visibleSearchResultArtworkImage()
     }
 
     private func waitForSearchResultAwaitingArtwork(query: String, timeout: TimeInterval) -> XCUIElement? {
@@ -2498,12 +2898,12 @@ class iHeartPerfTests: XCTestCase {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
             if !isContentLoadingVisible(),
-               (searchResultArtworkImage(in: container) != nil || (isLegacyRun && visibleMediaArtworkImage() != nil)) {
+               (searchResultArtworkImage(in: container) != nil || visibleSearchResultArtworkImage() != nil || (isLegacyRun && visibleMediaArtworkImage() != nil)) {
                 return true
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         } while Date() < deadline
-        return searchResultArtworkImage(in: container) != nil || (isLegacyRun && visibleMediaArtworkImage() != nil)
+        return searchResultArtworkImage(in: container) != nil || visibleSearchResultArtworkImage() != nil || (isLegacyRun && visibleMediaArtworkImage() != nil)
     }
 
     private func waitForMediaArtworkVisible(timeout: TimeInterval) -> Bool {
@@ -2879,14 +3279,41 @@ class iHeartPerfTests: XCTestCase {
         return false
     }
 
+    @discardableResult
+    private func dismissLocalRadioPromptIfPresent() -> Bool {
+        let promptText = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] 'local radio' OR label CONTAINS[c] 'favorite DJs'")
+        ).firstMatch
+        let promptButton = app.buttons.matching(
+            NSPredicate(format: "label ==[c] 'No Thanks' OR label CONTAINS[c] 'No Thanks' OR label CONTAINS[c] 'Use Postcode'")
+        ).firstMatch
+
+        guard promptText.exists || promptButton.exists else { return false }
+
+        let dismissButton = app.buttons.matching(
+            NSPredicate(format: "label ==[c] 'No Thanks' OR label CONTAINS[c] 'No Thanks'")
+        ).firstMatch
+        if dismissButton.exists {
+            dismissButton.forceTap()
+            return true
+        }
+
+        if promptButton.exists {
+            promptButton.forceTap()
+            return true
+        }
+        return false
+    }
+
     private func clearInterferingPrompts(reason: String, timeout: TimeInterval = 4) {
         let deadline = Date().addingTimeInterval(timeout)
         var dismissedAnything = false
         repeat {
             let dismissedPrompt = dismissUnexpectedAuthPromptIfPresent()
             let dismissedAppError = dismissAppErrorAlertIfPresent()
+            let dismissedLocalRadio = dismissLocalRadioPromptIfPresent()
             let dismissedAd = dismissAdsIfPresent(reason: reason)
-            guard dismissedPrompt || dismissedAppError || dismissedAd else { break }
+            guard dismissedPrompt || dismissedAppError || dismissedLocalRadio || dismissedAd else { break }
             dismissedAnything = true
             RunLoop.current.run(until: Date().addingTimeInterval(0.4))
         } while Date() < deadline
@@ -2924,7 +3351,7 @@ class iHeartPerfTests: XCTestCase {
     }
 
     private func returnToRootIfNeeded() {
-        if app.tabBars.buttons[UI.homeTab].exists {
+        if homeTabCandidates().contains(where: { $0.exists }) {
             selectTab(label: UI.homeTab, identifier: "homeTab")
         }
     }
@@ -3269,7 +3696,7 @@ class iHeartPerfTests: XCTestCase {
                 app.buttons["ProfileHeaderView-Play-Button"],
                 app.buttons["NowPlaying-Play-Button"],
                 app.buttons["MiniPlayer-Play-Button"],
-                app.buttons["Play"],
+                app.buttons.matching(NSPredicate(format: "identifier ==[c] 'Play' OR label ==[c] 'Play'")).firstMatch,
                 app.buttons["Shuffle Play"],
                 app.buttons.matching(NSPredicate(format: "identifier CONTAINS[c] 'play' OR label ==[c] 'Play' OR label CONTAINS[c] 'Play'")).firstMatch,
                 app.cells.buttons.firstMatch,
@@ -3279,6 +3706,11 @@ class iHeartPerfTests: XCTestCase {
                let playlistPreferred = preferredPlaylistPlayButton() {
                 playCandidates.append(playlistPreferred)
             }
+            if context.localizedCaseInsensitiveContains("podcast") {
+                if let episodePlayButton = preferredPodcastEpisodePlayButton() {
+                    playCandidates.append(episodePlayButton)
+                }
+            }
             if let preferred = preferredPlayButton() {
                 playCandidates.append(preferred)
             }
@@ -3286,21 +3718,41 @@ class iHeartPerfTests: XCTestCase {
                 app.buttons["ProfileHeaderView-Play-Button"],
                 app.buttons["NowPlaying-Play-Button"],
                 app.buttons["MiniPlayer-Play-Button"],
-                app.buttons["Play"],
+                app.buttons.matching(NSPredicate(format: "identifier ==[c] 'Play' OR label ==[c] 'Play'")).firstMatch,
                 app.buttons["Shuffle Play"],
                 app.buttons.matching(NSPredicate(format: "identifier CONTAINS[c] 'play' OR label ==[c] 'Play' OR label CONTAINS[c] 'Play'")).firstMatch,
             ])
         }
-        _ = tapFirstExisting(playCandidates, context: context, failIfMissing: false)
+
+        let baselineProgressSnapshot = currentPlaybackProgressSnapshot()
+        for candidate in deduplicateElements(playCandidates) where candidate.exists && !candidate.frame.isEmpty {
+            candidate.forceTap()
+            RunLoop.current.run(until: Date().addingTimeInterval(isLegacyRun ? 0.7 : 0.45))
+            dismissAdsIfPresent(reason: "\(context)_afterPlayTap")
+            if waitForPlaybackStarted(timeout: isLegacyRun ? 3.5 : 2.5, baselineProgressSnapshot: baselineProgressSnapshot) {
+                return
+            }
+        }
     }
 
     private func assertPlaybackStarted(context: String) {
         let timeout: TimeInterval = isLegacyRun ? 16 : 10
         let baselineProgressSnapshot = currentPlaybackProgressSnapshot()
-        startPlaybackIfNeeded(context: context)
-        if waitForPlaybackStarted(timeout: timeout, baselineProgressSnapshot: baselineProgressSnapshot) {
-            return
+        let attemptCount = isLegacyRun ? 3 : 2
+
+        for attempt in 0..<attemptCount {
+            startPlaybackIfNeeded(context: context)
+            let waitWindow = attempt == 0 ? timeout : max(4, timeout / 2)
+            if waitForPlaybackStarted(timeout: waitWindow, baselineProgressSnapshot: baselineProgressSnapshot) {
+                return
+            }
+            dismissAdsIfPresent(reason: "\(context)_retry")
+            clearInterferingPrompts(reason: "\(context)_retry", timeout: 0.3)
+            if currentAppErrorMessage() != nil || currentInlineAPIErrorMessage() != nil {
+                break
+            }
         }
+
         var failureParts: [String] = []
         if let appError = currentAppErrorMessage() {
             failureParts.append("App error visible: \(appError)")

@@ -814,6 +814,30 @@ if [ "${#ONLY_TEST_ARGS[@]}" -eq 0 ]; then
   exit 2
 fi
 
+SELECTED_REPORT_SCENARIOS=()
+append_selected_report_scenario() {
+  local shell_key="$1"
+  local report_key="$2"
+  if scenario_selected "$shell_key"; then
+    SELECTED_REPORT_SCENARIOS+=("$report_key")
+  fi
+}
+
+append_selected_report_scenario cold_launch ColdLaunch
+append_selected_report_scenario warm_resume WarmResume
+append_selected_report_scenario login Login
+append_selected_report_scenario tab_switch_journey TabSwitchJourney
+append_selected_report_scenario search Search
+append_selected_report_scenario image_loading ImageLoading
+append_selected_report_scenario radio_play_start RadioPlayStart
+append_selected_report_scenario podcast_play_start PodcastPlayStart
+append_selected_report_scenario playlist_play_start PlaylistPlayStart
+append_selected_report_scenario radio_scroll RadioScroll
+append_selected_report_scenario logout Logout
+
+SELECTED_REPORT_SCENARIOS_CSV="$(IFS=,; echo "${SELECTED_REPORT_SCENARIOS[*]}")"
+echo "PERF_SELECTED_SCENARIOS ${SELECTED_REPORT_SCENARIOS_CSV}" | tee -a "$LOG_PATH"
+
 FULL_SCENARIO_SELECTION=1
 for scenario_key in \
   cold_launch \

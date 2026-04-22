@@ -7,7 +7,33 @@ APP_NAME="PerfoMace Launcher v2.app"
 DIST_DIR="${ROOT_DIR}/launcher/dist"
 DEST_APP="${DIST_DIR}/${APP_NAME}"
 READY_CHECK_APP="${DIST_DIR}/PerfoMace Ready Check.app"
-SHAREABLE_ZIP="/Users/jyotidash/Desktop/PerfoMace-v2-shareable.zip"
+LOCAL_SHARE_DIR="${ROOT_DIR}/local_share"
+SHAREABLE_ZIP="${LOCAL_SHARE_DIR}/PerfoMace-v2-local-share.zip"
+
+ensure_tmpdir() {
+  local candidate="${TMPDIR:-}"
+  local probe=""
+
+  if [ -n "$candidate" ] && [ -d "$candidate" ] && [ -w "$candidate" ]; then
+    probe="$(mktemp "$candidate/perfomace_launcher_tmp.XXXXXX" 2>/dev/null || true)"
+    if [ -n "$probe" ]; then
+      rm -f "$probe"
+      return 0
+    fi
+  fi
+
+  local fallback=""
+  fallback="$(mktemp -d "/tmp/perfomace_launcher_tmp.XXXXXX" 2>/dev/null || true)"
+  if [ -z "$fallback" ]; then
+    mkdir -p /tmp/perfomace_launcher_tmp_fallback
+    fallback="/tmp/perfomace_launcher_tmp_fallback"
+  fi
+
+  export TMPDIR="$fallback"
+  echo "Using fallback TMPDIR: $TMPDIR"
+}
+
+ensure_tmpdir
 
 echo "Building ${APP_NAME}..."
 xcodebuild -project "${ROOT_DIR}/PerfoMace.xcodeproj" \
@@ -25,6 +51,7 @@ cp -R "${BUILD_DIR}/Build/Products/Debug/${APP_NAME}" "${DEST_APP}"
 echo "Building ready check app..."
 "${ROOT_DIR}/launcher/build_ready_check_app.sh"
 
+mkdir -p "${LOCAL_SHARE_DIR}"
 echo "Creating shareable zip at ${SHAREABLE_ZIP}..."
 python3 - "${ROOT_DIR}" "${SHAREABLE_ZIP}" <<'PY'
 import os
