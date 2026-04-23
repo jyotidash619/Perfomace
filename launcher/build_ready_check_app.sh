@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_FILE="$SCRIPT_DIR/ready_check.applescript"
 DIST_DIR="$SCRIPT_DIR/dist"
 APP_PATH="$DIST_DIR/PerfoMace Ready Check.app"
+ICON_PATH="$SCRIPT_DIR/icons/PerfoMace_Ready_Check.icns"
 
 ensure_tmpdir() {
   local candidate="${TMPDIR:-}"
@@ -34,5 +35,9 @@ ensure_tmpdir
 mkdir -p "$DIST_DIR"
 rm -rf "$APP_PATH"
 /usr/bin/osacompile -o "$APP_PATH" "$SOURCE_FILE"
+
+if [ -f "$ICON_PATH" ]; then
+  cp -f "$ICON_PATH" "$APP_PATH/Contents/Resources/applet.icns"
+fi
 
 echo "Built: $APP_PATH"
