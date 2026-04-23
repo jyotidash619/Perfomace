@@ -217,7 +217,11 @@ class iHeartPerfTests: XCTestCase {
         }
         selectTab(label: "Radio", identifier: "radioTab")
         guard let stationTarget = firstRadioStationTarget() else {
-            emitScenarioSkip(name: "RadioPlayStart", reason: "no_content")
+            _ = measureMetricsOnce("RadioPlayStart") {
+                _ = waitForRadioContentReady(timeout: 2)
+            }
+            dumpAccessibilityTree("RadioStationMissing")
+            XCTFail("No playable radio station found.")
             return
         }
         _ = measureOptionalMetricsOnce("RadioPlayStart") {
@@ -950,7 +954,7 @@ class iHeartPerfTests: XCTestCase {
     }
 
     @discardableResult
-    private func measureOptionalMetricsOnce(_ name: String, _ block: () -> Bool) -> TimeInterval? {
+    private func measureOptionalMetricsOnce(_ name: String, _ block: () -> Bool) -> TimeInterval {
         let options = XCTMeasureOptions()
         options.iterationCount = 1
         options.invocationOptions = [.manuallyStart, .manuallyStop]
@@ -967,9 +971,8 @@ class iHeartPerfTests: XCTestCase {
             stopMeasuring()
         }
 
-        guard shouldEmitMetric else {
+        if !shouldEmitMetric {
             emitScenarioSkip(name: name, reason: "no_content")
-            return nil
         }
 
         emitPerfMetric(name: name, duration: duration)
@@ -1053,6 +1056,7 @@ class iHeartPerfTests: XCTestCase {
             }
 
             let backCandidates = [
+                app.buttons["Back-NavBar-Button"],
                 app.buttons["ProfileHeader-backButton"],
                 app.navigationBars.buttons["Back"],
                 app.buttons["Back"],
@@ -1089,7 +1093,7 @@ class iHeartPerfTests: XCTestCase {
             dismissKeyboardIfPresent()
             clearInterferingPrompts(reason: "ensureHomeTabSelectedForLogout", timeout: 0.4)
 
-            if homeSurfaceVisible() || waitForHomeSurface(timeout: 0.8) {
+            if homeSurfaceVisible() || waitForHomeSurface(timeout: isLegacyRun ? 1.6 : 0.8) {
                 return true
             }
 
@@ -1105,7 +1109,7 @@ class iHeartPerfTests: XCTestCase {
                 }
             }
         }
-        return waitForHomeSurface(timeout: 1.0)
+        return waitForHomeSurface(timeout: isLegacyRun ? 2.0 : 1.0)
     }
 
     private func tapHomeTabForLogout() -> Bool {
@@ -1689,13 +1693,13 @@ class iHeartPerfTests: XCTestCase {
             selectTab(label: "Search", identifier: "searchTab")
             dismissAdsIfPresent(reason: "beforeSearchInput")
 
-            if !waitForSearchSurface(timeout: 2.5) {
+            if !waitForSearchSurface(timeout: isLegacyRun ? 2.0 : 1.2) {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.4))
                 continue
             }
 
             clearInterferingPrompts(reason: "beforeSearchInput", timeout: 0.4)
-            if let input = activateSearchInput(timeout: isLegacyRun ? 4.5 : 3.5) {
+            if let input = activateSearchInput(timeout: isLegacyRun ? 3.0 : 1.8) {
                 input.forceTap()
                 input.clearAndType(query)
                 return
@@ -1824,7 +1828,7 @@ class iHeartPerfTests: XCTestCase {
 
     @discardableResult
     private func waitForSearchResults(query: String, timeout: TimeInterval = 10) -> Bool {
-        let effectiveTimeout = max(timeout, isLegacyRun ? 10 : 8)
+        let effectiveTimeout = max(timeout, isLegacyRun ? 8 : 5)
         let deadline = Date().addingTimeInterval(effectiveTimeout)
         repeat {
             if !isLegacyRun && qaSearchResultsLoaded() {

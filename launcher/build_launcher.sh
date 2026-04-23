@@ -112,7 +112,6 @@ for entry in include_roots:
                 "history",
                 "exports",
                 "dist_build",
-                "dist",
                 "dist.zip",
                 "__pycache__",
                 "xcuserdata",

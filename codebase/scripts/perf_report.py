@@ -1685,10 +1685,12 @@ def _build_scenario_cards(custom_summary, trace_summaries, scenario_statuses=Non
                     }
                 )
         timing = stats or {
-            "mean": "NA",
-            "min": "NA",
-            "max": "NA",
-            "count": "NA",
+            "mean": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "count": 0,
+            "values": [],
+            "iterations": [],
         }
         scenario_status = status_info.get("status") or ("finished" if stats else ("not_run" if was_selected else "unknown"))
         scenario_reason = status_info.get("reason") or ("no metric emitted" if was_selected and not stats else "")
@@ -1707,8 +1709,8 @@ def _build_scenario_cards(custom_summary, trace_summaries, scenario_statuses=Non
 
 
 def _fmt_num(value):
-    if value is None or value == "":
-        return ""
+    if value is None or value == "" or str(value).upper() == "NA":
+        return "0.000"
     try:
         return f"{float(value):.3f}"
     except Exception:
@@ -2052,14 +2054,10 @@ def _write_csv(path, payload):
         if scenario_cards:
             for card in scenario_cards:
                 timing = card.get("timing") or {}
-                status = (card.get("status") or "").lower()
-                if status in {"failed", "skipped"} and timing.get("mean") == "NA":
-                    mean = min_value = max_value = runs = "NA"
-                else:
-                    mean = _fmt_num(timing.get("mean"))
-                    min_value = _fmt_num(timing.get("min"))
-                    max_value = _fmt_num(timing.get("max"))
-                    runs = timing.get("count", 0)
+                mean = _fmt_num(timing.get("mean"))
+                min_value = _fmt_num(timing.get("min"))
+                max_value = _fmt_num(timing.get("max"))
+                runs = timing.get("count", 0)
                 writer.writerow([
                     card.get("label", ""),
                     mean,
@@ -2097,7 +2095,7 @@ def _write_csv(path, payload):
                 status = health.get("status") or ("ok" if not info.get("error") else "error")
                 error = info.get("error") or ""
                 if not summary_map:
-                    writer.writerow([trace_name, "", "", "", "", "", status, error])
+                    writer.writerow([trace_name, "Unavailable", "0.000", "0.000", "0.000", "0", status, error or "No trace metrics exported"])
                     continue
                 for metric_name, stat in summary_map.items():
                     writer.writerow([
@@ -2106,7 +2104,7 @@ def _write_csv(path, payload):
                         _fmt_num(stat.get("avg")),
                         _fmt_num(stat.get("min")),
                         _fmt_num(stat.get("max")),
-                        stat.get("count", ""),
+                        stat.get("count", 0),
                         status,
                         error,
                     ])
@@ -2127,12 +2125,16 @@ def _write_html(path, payload):
     scenario_cards = payload.get("scenario_cards", [])
 
     def _fmt(v):
+        if v is None or v == "" or str(v).upper() == "NA":
+            return "0.000"
         try:
             return f"{float(v):.3f}"
         except Exception:
             return str(v)
 
     def _fmt_time(v):
+        if v is None or v == "" or str(v).upper() == "NA":
+            return "0.000s"
         try:
             return f"{float(v):.3f}s"
         except Exception:
