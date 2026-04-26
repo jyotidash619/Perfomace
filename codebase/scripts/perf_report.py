@@ -931,6 +931,14 @@ def _trace_summary(trace_path, kind, process_name=None, process_bundle_id=None):
             "com.apple.xray.energy",
             "com.apple.xray.energy.log",
         ]
+    elif kind == "hitches":
+        keywords = ["hitch", "hang", "stall", "freeze", "jank", "animation"]
+        preferred = [
+            "animation-hitches",
+            "com.apple.xray.animation-hitches",
+            "com.apple.xray.instrument-type.animation-hitches",
+            "com.apple.xray.instrument-type.hitches",
+        ]
     elif kind == "leaks":
         keywords = ["leak", "malloc", "allocation"]
         preferred = [
@@ -1821,6 +1829,14 @@ def _trace_sidecar_exists(traces_dir, trace_name):
             "Leaks.export.log",
             "Leaks.table.xml",
         ],
+        "Power Profiler": [
+            "Power_Profiler.log",
+            "PowerProfiler.log",
+        ],
+        "Animation Hitches": [
+            "Animation_Hitches.log",
+            "AnimationHitches.log",
+        ],
         "Network": [
             "Network.log",
             "Network.export.log",
@@ -2607,7 +2623,8 @@ def main():
         activity_monitor_trace = os.path.join(traces_dir, "ActivityMonitor.trace")
         time_profiler_trace = os.path.join(traces_dir, "TimeProfiler.trace")
         allocations_trace = os.path.join(traces_dir, "Allocations.trace")
-        energy_trace = os.path.join(traces_dir, "Energy.trace")
+        energy_trace = os.path.join(traces_dir, "PowerProfiler.trace")
+        hitches_trace = os.path.join(traces_dir, "AnimationHitches.trace")
         leaks_trace = os.path.join(traces_dir, "Leaks.trace")
         network_trace = os.path.join(traces_dir, "Network.trace")
         if (os.path.exists(activity_monitor_trace) or _trace_sidecar_exists(traces_dir, "ActivityMonitor")) and (
@@ -2646,7 +2663,9 @@ def main():
             if memory_summary:
                 payload["traces"]["Allocations"] = allocations_trace
                 payload["trace_summaries"]["Allocations"] = memory_summary
-        if os.path.exists(energy_trace) and _trace_recorded_this_run("Energy.trace"):
+        if (os.path.exists(energy_trace) or _trace_sidecar_exists(traces_dir, "Power Profiler")) and (
+            _trace_recorded_this_run("PowerProfiler.trace") or _trace_sidecar_exists(traces_dir, "Power Profiler")
+        ):
             energy_summary = _trace_summary(
                 energy_trace,
                 "energy",
@@ -2654,8 +2673,20 @@ def main():
                 process_bundle_id=process_bundle_id,
             )
             if energy_summary:
-                payload["traces"]["Energy Log"] = energy_trace
-                payload["trace_summaries"]["Energy Log"] = energy_summary
+                payload["traces"]["Power Profiler"] = energy_trace
+                payload["trace_summaries"]["Power Profiler"] = energy_summary
+        if (os.path.exists(hitches_trace) or _trace_sidecar_exists(traces_dir, "Animation Hitches")) and (
+            _trace_recorded_this_run("AnimationHitches.trace") or _trace_sidecar_exists(traces_dir, "Animation Hitches")
+        ):
+            hitches_summary = _trace_summary(
+                hitches_trace,
+                "hitches",
+                process_name=process_name,
+                process_bundle_id=process_bundle_id,
+            )
+            if hitches_summary:
+                payload["traces"]["Animation Hitches"] = hitches_trace
+                payload["trace_summaries"]["Animation Hitches"] = hitches_summary
         if (os.path.exists(leaks_trace) or _trace_sidecar_exists(traces_dir, "Leaks")) and (
             _trace_recorded_this_run("Leaks.trace") or _trace_sidecar_exists(traces_dir, "Leaks")
         ):

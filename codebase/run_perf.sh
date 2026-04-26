@@ -669,6 +669,7 @@ if [ "$PERF_FAST" -eq 1 ]; then
   export INSTRUMENTS_TIME_PROFILER=0
   export INSTRUMENTS_ALLOCATIONS=0
   export INSTRUMENTS_ENERGY=0
+  export INSTRUMENTS_HITCHES=0
   export AUTO_OPEN_TRACES=0
 else
   export INSTRUMENTS="${INSTRUMENTS:-1}"
@@ -677,6 +678,7 @@ else
   export INSTRUMENTS_TIME_PROFILER="${INSTRUMENTS_TIME_PROFILER:-1}"
   export INSTRUMENTS_ALLOCATIONS="${INSTRUMENTS_ALLOCATIONS:-1}"
   export INSTRUMENTS_ENERGY="${INSTRUMENTS_ENERGY:-0}"
+  export INSTRUMENTS_HITCHES="${INSTRUMENTS_HITCHES:-0}"
 fi
 
 if [ "$PERF_ANALYSIS" -eq 1 ]; then
@@ -686,6 +688,7 @@ if [ "$PERF_ANALYSIS" -eq 1 ]; then
   export INSTRUMENTS_TIME_PROFILER=1
   export INSTRUMENTS_ALLOCATIONS=1
   export INSTRUMENTS_ENERGY=1
+  export INSTRUMENTS_HITCHES=1
 fi
 export PERF_REPEAT_COUNT="${TEST_ITERATIONS}"
 export AUTO_OPEN_RESULTS="${AUTO_OPEN_RESULTS:-1}"
@@ -1383,7 +1386,7 @@ PY
     local record_target_args=()
 
 	    case "$template_name" in
-	      "Activity Monitor"|"Leaks"|"Network"|"Time Profiler"|"Allocations"|"Energy Log")
+	      "Activity Monitor"|"Leaks"|"Network"|"Time Profiler"|"Allocations"|"Power Profiler"|"Animation Hitches")
         if [ -n "${INSTRUMENTS_PROCESS_NAME:-}" ]; then
           record_target_args=(
             --attach "$INSTRUMENTS_PROCESS_NAME"
@@ -1554,14 +1557,25 @@ PY
 	  fi
 
 	  if [ "${INSTRUMENTS_ENERGY:-0}" -eq 1 ]; then
-	    trace_status "Energy Log" "started"
-	    if record_trace_with_probe "Energy Log" "$TRACE_DIR/Energy.trace"; then
-	      trace_status "Energy Log" "captured"
+	    trace_status "Power Profiler" "started"
+	    if record_trace_with_probe "Power Profiler" "$TRACE_DIR/PowerProfiler.trace"; then
+	      trace_status "Power Profiler" "captured"
 	    else
-	      trace_status "Energy Log" "failed"
+	      trace_status "Power Profiler" "failed"
 	    fi
 	  else
-	    trace_status "Energy Log" "disabled"
+	    trace_status "Power Profiler" "disabled"
+	  fi
+
+	  if [ "${INSTRUMENTS_HITCHES:-0}" -eq 1 ]; then
+	    trace_status "Animation Hitches" "started"
+	    if record_trace_with_probe "Animation Hitches" "$TRACE_DIR/AnimationHitches.trace"; then
+	      trace_status "Animation Hitches" "captured"
+	    else
+	      trace_status "Animation Hitches" "failed"
+	    fi
+	  else
+	    trace_status "Animation Hitches" "disabled"
 	  fi
 
   if [ "${INSTRUMENTS_ALLOCATIONS:-1}" -eq 1 ]; then
