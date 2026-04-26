@@ -396,6 +396,25 @@ def _extract_numeric_summary(table_xml, process_name=None, process_bundle_id=Non
     return summary
 
 
+def _trace_table_row_count(table_xml):
+    if not table_xml:
+        return 0
+    try:
+        root = ET.fromstring(table_xml)
+    except Exception:
+        return 0
+    rows = root.findall(".//row")
+    return len(rows or [])
+
+
+def _summarize_table_row_count(table_xml, metric_name="Event Count"):
+    count = _trace_table_row_count(table_xml)
+    if count <= 0:
+        return {}
+    numeric = float(count)
+    return {metric_name: {"avg": numeric, "max": numeric, "min": numeric, "count": 1}}
+
+
 def _scalar_stats(value):
     numeric = float(value)
     return {"avg": numeric, "max": numeric, "min": numeric, "count": 1}
@@ -939,6 +958,9 @@ def _trace_summary(trace_path, kind, process_name=None, process_bundle_id=None):
             "com.apple.xray.instrument-type.animation-hitches",
             "com.apple.xray.instrument-type.hitches",
         ]
+    elif kind == "events":
+        keywords = ["event", "log", "message", "trace", "point", "sample", "signpost"]
+        preferred = []
     elif kind == "leaks":
         keywords = ["leak", "malloc", "allocation"]
         preferred = [
@@ -1009,6 +1031,8 @@ def _trace_summary(trace_path, kind, process_name=None, process_bundle_id=None):
                 summary = _curate_activity_summary(summary)
             elif kind == "network":
                 summary = _curate_network_summary(summary)
+            elif kind in {"events", "hitches"} and not summary:
+                summary = _summarize_table_row_count(table_xml)
         if summary:
             return {"schema": schema, "summary": summary, "health": health}
         last_error = _default_no_data_error(kind)
@@ -1063,10 +1087,12 @@ def _trace_summary(trace_path, kind, process_name=None, process_bundle_id=None):
                 process_name=process_name,
                 process_bundle_id=process_bundle_id,
             )
-        if kind == "activity":
-            summary = _curate_activity_summary(summary)
-        elif kind == "network":
-            summary = _curate_network_summary(summary)
+            if kind == "activity":
+                summary = _curate_activity_summary(summary)
+            elif kind == "network":
+                summary = _curate_network_summary(summary)
+            elif kind in {"events", "hitches"} and not summary:
+                summary = _summarize_table_row_count(table_xml)
         if summary:
             return {"schema": schema, "summary": summary, "health": health}
         last_error = _default_no_data_error(kind)
@@ -2707,13 +2733,13 @@ def main():
                 payload["traces"]["Animation Hitches"] = hitches_trace
                 payload["trace_summaries"]["Animation Hitches"] = hitches_summary
 
-        # The templates below don't always export stable numeric tables; we still surface health + errors.
+        # The templates below don't always export stable numeric tables; we still surface stable counts.
         if (os.path.exists(system_trace) or _trace_sidecar_exists(traces_dir, "System Trace")) and (
             _trace_recorded_this_run("SystemTrace.trace") or _trace_sidecar_exists(traces_dir, "System Trace")
         ):
             payload["traces"]["System Trace"] = system_trace
             payload["trace_summaries"]["System Trace"] = _trace_summary(
-                system_trace, "activity", process_name=process_name, process_bundle_id=process_bundle_id
+                system_trace, "events", process_name=process_name, process_bundle_id=process_bundle_id
             ) or {"health": _inspect_trace_bundle(system_trace)}
 
         if (os.path.exists(app_launch_trace) or _trace_sidecar_exists(traces_dir, "App Launch")) and (
@@ -2721,7 +2747,7 @@ def main():
         ):
             payload["traces"]["App Launch"] = app_launch_trace
             payload["trace_summaries"]["App Launch"] = _trace_summary(
-                app_launch_trace, "activity", process_name=process_name, process_bundle_id=process_bundle_id
+                app_launch_trace, "events", process_name=process_name, process_bundle_id=process_bundle_id
             ) or {"health": _inspect_trace_bundle(app_launch_trace)}
 
         if (os.path.exists(swift_concurrency_trace) or _trace_sidecar_exists(traces_dir, "Swift Concurrency")) and (
@@ -2729,7 +2755,7 @@ def main():
         ):
             payload["traces"]["Swift Concurrency"] = swift_concurrency_trace
             payload["trace_summaries"]["Swift Concurrency"] = _trace_summary(
-                swift_concurrency_trace, "activity", process_name=process_name, process_bundle_id=process_bundle_id
+                swift_concurrency_trace, "events", process_name=process_name, process_bundle_id=process_bundle_id
             ) or {"health": _inspect_trace_bundle(swift_concurrency_trace)}
 
         if (os.path.exists(logging_trace) or _trace_sidecar_exists(traces_dir, "Logging")) and (
@@ -2737,7 +2763,7 @@ def main():
         ):
             payload["traces"]["Logging"] = logging_trace
             payload["trace_summaries"]["Logging"] = _trace_summary(
-                logging_trace, "activity", process_name=process_name, process_bundle_id=process_bundle_id
+                logging_trace, "events", process_name=process_name, process_bundle_id=process_bundle_id
             ) or {"health": _inspect_trace_bundle(logging_trace)}
         if (os.path.exists(leaks_trace) or _trace_sidecar_exists(traces_dir, "Leaks")) and (
             _trace_recorded_this_run("Leaks.trace") or _trace_sidecar_exists(traces_dir, "Leaks")
