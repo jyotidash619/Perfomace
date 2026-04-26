@@ -23,20 +23,30 @@ struct ContentView: View {
         return formatter
     }()
 
-    private let sapphire = Color(red: 0.78, green: 0.16, blue: 0.34)
-    private let deepSapphire = Color(red: 0.09, green: 0.10, blue: 0.13)
-    private let golden = Color(red: 0.69, green: 0.18, blue: 0.56)
-    private let warmGold = Color(red: 0.96, green: 0.89, blue: 0.93)
-    private let ivory = Color(red: 0.98, green: 0.99, blue: 1.00)
-    private let mist = Color(red: 0.95, green: 0.95, blue: 0.97)
-    private let rose = Color(red: 0.62, green: 0.12, blue: 0.24)
-    private let panelBorder = Color(red: 0.88, green: 0.83, blue: 0.90)
-    private let panelFill = Color.white
-    private let brandInk = Color(red: 0.07, green: 0.09, blue: 0.13)
-    private let brandCyan = Color(red: 0.22, green: 0.77, blue: 0.97)
-    private let brandBlue = Color(red: 0.18, green: 0.47, blue: 0.99)
-    private let brandOrange = Color(red: 0.98, green: 0.56, blue: 0.18)
-    private let brandEmber = Color(red: 0.95, green: 0.34, blue: 0.15)
+    // Premium dark SaaS theme tokens.
+    private let appBg = Color(red: 0.06, green: 0.07, blue: 0.08) // #0F1115
+    private let surface = Color(red: 0.11, green: 0.12, blue: 0.16) // #1B1F2A
+    private let border = Color(red: 0.16, green: 0.18, blue: 0.23) // #2A2F3A
+    private let textPrimary = Color(red: 0.90, green: 0.92, blue: 0.95) // #E6EAF2
+    private let textSecondary = Color(red: 0.60, green: 0.64, blue: 0.70) // #9AA4B2
+    private let textMuted = Color(red: 0.42, green: 0.45, blue: 0.50) // #6B7280
+    private let deepSapphire = Color(red: 0.90, green: 0.92, blue: 0.95)
+    private let warmGold = Color(red: 0.11, green: 0.12, blue: 0.16)
+    private let mist = Color(red: 0.16, green: 0.18, blue: 0.23)
+
+    private let sapphire = Color(red: 0.36, green: 0.42, blue: 0.75) // #5C6BC0
+    private let success = Color(red: 0.13, green: 0.77, blue: 0.37) // #22C55E
+    private let warning = Color(red: 0.96, green: 0.62, blue: 0.04) // #F59E0B
+    private let rose = Color(red: 0.94, green: 0.27, blue: 0.27) // #EF4444
+
+    private let golden = Color(red: 0.96, green: 0.62, blue: 0.04) // maps to warning
+    private let panelBorder = Color(red: 0.16, green: 0.18, blue: 0.23)
+    private let panelFill = Color(red: 0.11, green: 0.12, blue: 0.16)
+    private let brandInk = Color(red: 0.06, green: 0.07, blue: 0.08)
+    private let brandCyan = Color(red: 0.36, green: 0.42, blue: 0.75)
+    private let brandBlue = Color(red: 0.36, green: 0.42, blue: 0.75)
+    private let brandOrange = Color(red: 0.96, green: 0.62, blue: 0.04)
+    private let brandEmber = Color(red: 0.94, green: 0.27, blue: 0.27)
 
     private var projectRoot: URL? {
         let trimmed = projectPath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -217,7 +227,7 @@ struct ContentView: View {
                                 HStack {
                                     Text("Choose exactly which measured scenarios to run.")
                                         .font(.system(size: 11, weight: .medium, design: .default))
-                                        .foregroundStyle(.secondary)
+                                        .foregroundStyle(textSecondary)
                                     Spacer()
                                     Button("All") {
                                         config.selectedScenarios = Set(RunConfiguration.Scenario.allCases)
@@ -232,18 +242,23 @@ struct ContentView: View {
                                 }
 
                                 LazyVGrid(columns: [
-                                    GridItem(.flexible(), spacing: 10, alignment: .leading),
-                                    GridItem(.flexible(), spacing: 10, alignment: .leading),
-                                ], alignment: .leading, spacing: 8) {
+                                    GridItem(.flexible(), spacing: 12, alignment: .leading),
+                                    GridItem(.flexible(), spacing: 12, alignment: .leading),
+                                    GridItem(.flexible(), spacing: 12, alignment: .leading),
+                                ], alignment: .leading, spacing: 12) {
                                     ForEach(RunConfiguration.Scenario.allCases) { scenario in
-                                        Toggle(scenario.displayName, isOn: scenarioBinding(scenario))
-                                            .toggleStyle(.checkbox)
+                                        ScenarioTile(
+                                            title: scenario.displayName,
+                                            icon: scenarioIconName(scenario),
+                                            isOn: scenarioBinding(scenario),
+                                            accent: sapphire
+                                        )
                                     }
                                 }
 
                                 Text("Fresh-state prep stays automatic when needed. It is not counted as one of these scenarios.")
                                     .font(.system(size: 10.5, weight: .regular, design: .default))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(textMuted)
                             }
                         }
                         .groupBoxStyle(CardGroupBoxStyle())
@@ -274,12 +289,19 @@ struct ContentView: View {
                                         .tracking(0.9)
 
                                     Toggle("Strict ads", isOn: $config.strictAds)
+                                        .toggleStyle(.switch)
                                     Toggle("Reset simulator", isOn: $config.resetSimulator)
+                                        .toggleStyle(.switch)
                                     Toggle("Time Profiler", isOn: $config.instrumentsTimeProfiler)
+                                        .toggleStyle(.switch)
                                     Toggle("Allocations", isOn: $config.instrumentsAllocations)
+                                        .toggleStyle(.switch)
                                     Toggle("Network tracing", isOn: $config.instrumentsNetwork)
+                                        .toggleStyle(.switch)
                                     Toggle("Leaks tracing", isOn: $config.instrumentsLeaks)
+                                        .toggleStyle(.switch)
                                     Toggle("Zip results", isOn: $config.zipResults)
+                                        .toggleStyle(.switch)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .topLeading)
                             }
@@ -395,76 +417,48 @@ struct ContentView: View {
 
     private var sidebarBackground: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color(red: 0.99, green: 0.99, blue: 1.00), Color(red: 0.97, green: 0.96, blue: 0.98)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            Rectangle()
+            appBg
+            RoundedRectangle(cornerRadius: 180, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [brandInk, Color(red: 0.11, green: 0.11, blue: 0.15)],
+                        colors: [sapphire.opacity(0.20), Color.clear],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
-                .frame(height: 72)
-                .overlay(alignment: .bottomLeading) {
-                    Rectangle()
-                        .fill(brandCyan.opacity(0.72))
-                        .frame(width: 92, height: 1.5)
-                        .padding(.leading, 22)
-                        .padding(.bottom, 18)
-                }
-                .ignoresSafeArea(edges: .top)
-
-            RoundedRectangle(cornerRadius: 120, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [brandOrange.opacity(0.10), Color.clear],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .frame(width: 240, height: 160)
+                .frame(width: 520, height: 360)
                 .rotationEffect(.degrees(-14))
-                .offset(x: 220, y: 420)
+                .offset(x: 280, y: -200)
 
-            RoundedRectangle(cornerRadius: 120, style: .continuous)
+            RoundedRectangle(cornerRadius: 180, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [brandCyan.opacity(0.08), Color.clear],
+                        colors: [warning.opacity(0.10), Color.clear],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
-                .frame(width: 180, height: 120)
-                .rotationEffect(.degrees(20))
-                .offset(x: -180, y: 250)
+                .frame(width: 460, height: 320)
+                .rotationEffect(.degrees(18))
+                .offset(x: -280, y: 220)
         }
         .ignoresSafeArea()
     }
 
     private var detailBackground: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color.white, Color(red: 0.995, green: 0.99, blue: 1.00), Color(red: 0.98, green: 0.97, blue: 0.99)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
+            appBg
             RoundedRectangle(cornerRadius: 180, style: .continuous)
-                .fill(sapphire.opacity(0.04))
-                .frame(width: 340, height: 220)
+                .fill(sapphire.opacity(0.12))
+                .frame(width: 520, height: 360)
                 .rotationEffect(.degrees(-12))
-                .offset(x: 250, y: -120)
+                .offset(x: 320, y: -220)
 
             RoundedRectangle(cornerRadius: 220, style: .continuous)
-                .fill(golden.opacity(0.03))
-                .frame(width: 420, height: 280)
+                .fill(warning.opacity(0.08))
+                .frame(width: 620, height: 420)
                 .rotationEffect(.degrees(10))
-                .offset(x: -260, y: 260)
+                .offset(x: -340, y: 260)
         }
         .ignoresSafeArea()
     }
@@ -965,6 +959,33 @@ struct ContentView: View {
         )
     }
 
+    private func scenarioIconName(_ scenario: RunConfiguration.Scenario) -> String {
+        switch scenario {
+        case .coldLaunch:
+            return "bolt.fill"
+        case .warmResume:
+            return "arrow.triangle.2.circlepath"
+        case .login:
+            return "person.crop.circle.badge.checkmark"
+        case .tabSwitchJourney:
+            return "square.grid.2x2"
+        case .search:
+            return "magnifyingglass"
+        case .imageLoading:
+            return "photo.on.rectangle"
+        case .radioPlayStart:
+            return "dot.radiowaves.left.and.right"
+        case .podcastPlayStart:
+            return "mic.fill"
+        case .playlistPlayStart:
+            return "music.note.list"
+        case .radioScroll:
+            return "scroll"
+        case .logout:
+            return "person.crop.circle.badge.xmark"
+        }
+    }
+
     private func browseForCompareFile(role: CompareRole) {
         let panel = NSOpenPanel()
         panel.title = role == .baseline ? "Choose Re-Write / Baseline run folder or report" : "Choose Legacy / Candidate run folder or report"
@@ -1064,62 +1085,67 @@ struct ContentView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 12) {
-                        PerfoMaceLogoMark(size: 48)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("PerfoMace Launcher v2")
-                                .font(.system(size: 20, weight: .semibold, design: .default))
-                                .foregroundStyle(Color.white)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-
-                            Text("Winged performance control for repeatable Re-Write runs.")
-                                .font(.system(size: 12, weight: .medium, design: .default))
-                                .foregroundStyle(Color.white.opacity(0.78))
-                        }
-                    }
-
-                    HStack(spacing: 8) {
-                        heroBadge("JD with iHeart")
-                    }
+        HStack(spacing: 16) {
+            HStack(spacing: 12) {
+                PerfoMaceLogoMark(size: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("PerfoMace")
+                        .font(.system(size: 18, weight: .bold, design: .default))
+                        .foregroundStyle(textPrimary)
+                    Text("Launcher")
+                        .font(.system(size: 12, weight: .medium, design: .default))
+                        .foregroundStyle(textSecondary)
                 }
-
-                Spacer()
-                statusPill(
-                    overallRunStatus,
-                    isRunning: runner.isRunning && !runner.isStopping,
-                    isFailed: overallRunStatus == "Stopping" || overallRunStatus == "Needs Attention"
-                )
             }
 
-            heroAccentBar
-        }
-        .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color(red: 0.14, green: 0.11, blue: 0.16), Color(red: 0.08, green: 0.09, blue: 0.12)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+            Spacer()
+
+            Picker("", selection: $detailTab) {
+                Text("Report").tag(DetailTab.report)
+                Text("Live").tag(DetailTab.live)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 220)
+
+            Spacer()
+
+            HStack(spacing: 10) {
+                statusPill(
+                    runner.isCheckingSetup ? "Checking Setup" : overallRunStatus,
+                    isRunning: runner.isRunning || runner.isCheckingSetup,
+                    isFailed: overallRunStatus == "Stopping" || overallRunStatus == "Needs Attention"
                 )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(
-                            LinearGradient(
-                                colors: [brandCyan.opacity(0.75), brandOrange.opacity(0.65)],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            ),
-                            lineWidth: 1
+
+                Button {
+                    loadReportIfPresent()
+                    reportReloadToken += 1
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 13, weight: .semibold, design: .default))
+                        .foregroundStyle(textPrimary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(surface)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(border, lineWidth: 1)
+                                )
                         )
-                )
+                }
+                .buttonStyle(.plain)
+                .help("Reload report")
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(border.opacity(0.85), lineWidth: 1)
         )
-        .shadow(color: brandBlue.opacity(0.16), radius: 14, x: 0, y: 8)
+        .shadow(color: Color.black.opacity(0.25), radius: 20, x: 0, y: 6)
     }
 
     private var heroAccentBar: some View {
@@ -1910,13 +1936,13 @@ struct ContentView: View {
     }
 
     private var summaryBackground: some View {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
             .fill(panelFill)
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(panelBorder, lineWidth: 1)
             )
-            .shadow(color: sapphire.opacity(0.05), radius: 6, x: 0, y: 2)
+            .shadow(color: Color.black.opacity(0.25), radius: 20, x: 0, y: 6)
     }
 
     private func cardBackground(cornerRadius: CGFloat) -> some View {
@@ -1926,7 +1952,7 @@ struct ContentView: View {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(panelBorder, lineWidth: 1)
             )
-            .shadow(color: sapphire.opacity(0.05), radius: 6, x: 0, y: 2)
+            .shadow(color: Color.black.opacity(0.25), radius: 20, x: 0, y: 6)
     }
 
     private struct TimelineEntry: Identifiable {
@@ -2094,6 +2120,81 @@ private enum DetailTab: String, CaseIterable, Identifiable {
 private enum CompareRole {
     case baseline
     case candidate
+}
+
+private struct ScenarioTile: View {
+    let title: String
+    let icon: String
+    @Binding var isOn: Bool
+    let accent: Color
+
+    @State private var isHovering = false
+
+    private let surface = Color(red: 0.11, green: 0.12, blue: 0.16)
+    private let border = Color(red: 0.16, green: 0.18, blue: 0.23)
+    private let textPrimary = Color(red: 0.90, green: 0.92, blue: 0.95)
+    private let textSecondary = Color(red: 0.60, green: 0.64, blue: 0.70)
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isOn.toggle()
+            }
+        } label: {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(isOn ? accent.opacity(0.20) : Color.black.opacity(0.18))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(isOn ? accent.opacity(0.55) : border, lineWidth: 1)
+                        )
+                    Image(systemName: icon)
+                        .font(.system(size: 13, weight: .semibold, design: .default))
+                        .foregroundStyle(isOn ? accent : textSecondary)
+                }
+                .frame(width: 34, height: 34)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .semibold, design: .default))
+                        .foregroundStyle(textPrimary)
+                        .lineLimit(1)
+                    Text(isOn ? "Selected" : "Off")
+                        .font(.system(size: 11, weight: .medium, design: .default))
+                        .foregroundStyle(isOn ? accent.opacity(0.9) : textSecondary)
+                }
+
+                Spacer(minLength: 0)
+
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(isOn ? accent.opacity(0.18) : Color.black.opacity(0.10))
+                    Circle()
+                        .fill(isOn ? accent : border)
+                        .frame(width: 10, height: 10)
+                }
+                .frame(width: 26, height: 26)
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(surface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(isOn ? accent.opacity(0.70) : border, lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(isOn ? 0.35 : 0.22), radius: 20, x: 0, y: 6)
+            )
+            .scaleEffect(isHovering ? 1.01 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovering = hovering
+            }
+        }
+    }
 }
 
 private struct TraceLaneChip: View {
@@ -2481,18 +2582,18 @@ struct CardGroupBoxStyle: GroupBoxStyle {
         VStack(alignment: .leading, spacing: 10) {
             configuration.label
                 .font(.system(size: 13, weight: .semibold, design: .default))
-                .foregroundStyle(Color(red: 0.10, green: 0.15, blue: 0.22))
+                .foregroundStyle(Color(red: 0.90, green: 0.92, blue: 0.95))
             configuration.content
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(red: 0.11, green: 0.12, blue: 0.16))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color(red: 0.86, green: 0.89, blue: 0.93), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color(red: 0.16, green: 0.18, blue: 0.23), lineWidth: 1)
                 )
         )
-        .shadow(color: Color.black.opacity(0.03), radius: 8, x: 0, y: 3)
+        .shadow(color: Color.black.opacity(0.25), radius: 20, x: 0, y: 6)
     }
 }
