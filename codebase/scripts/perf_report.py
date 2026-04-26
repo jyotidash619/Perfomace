@@ -1310,6 +1310,60 @@ def _parse_scenario_statuses(log_path):
     return statuses
 
 
+def _parse_system_snapshots(log_path):
+    snapshots = {}
+    if not log_path or not os.path.exists(log_path):
+        return snapshots
+
+    line_re = re.compile(r"^SYS_SNAPSHOT\s+(.+)$")
+
+    def parse_kv(rest):
+        data = {}
+        for part in rest.split():
+            if "=" not in part:
+                continue
+            k, v = part.split("=", 1)
+            data[k.strip()] = v.strip()
+        return data
+
+    with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            m = line_re.search(line.strip())
+            if not m:
+                continue
+            kv = parse_kv(m.group(1))
+            scenario_key = _scenario_key_for_name(kv.get("scenario"))
+            if not scenario_key:
+                continue
+            snapshots.setdefault(scenario_key, []).append(kv)
+
+    return snapshots
+
+
+def _summarize_system_snapshots(system_snapshots):
+    summary = {}
+    for scenario_key, entries in (system_snapshots or {}).items():
+        thermal_order = {"nominal": 0, "fair": 1, "serious": 2, "critical": 3, "unknown": -1}
+        thermal_max = "unknown"
+        thermal_max_score = -1
+        mem_values = []
+        for item in entries:
+            thermal = (item.get("thermal") or "unknown").lower()
+            score = thermal_order.get(thermal, -1)
+            if score > thermal_max_score:
+                thermal_max_score = score
+                thermal_max = thermal
+            mem_raw = item.get("memMB")
+            if mem_raw and mem_raw != "unknown":
+                try:
+                    mem_values.append(float(mem_raw))
+                except Exception:
+                    pass
+        mean_mem = (sum(mem_values) / len(mem_values)) if mem_values else None
+        summary[scenario_key] = {"thermal_max": thermal_max, "mem_mb_mean": mean_mem, "samples": len(entries)}
+    return summary
+
+
 def _parse_selected_scenarios(log_path):
     if not log_path or not os.path.exists(log_path):
         return []
@@ -1662,10 +1716,11 @@ def _select_trace_metrics(summary, hints):
     return [{"name": metric_name, "stats": stats} for _, metric_name, stats in scored[:3]]
 
 
-def _build_scenario_cards(custom_summary, trace_summaries, scenario_statuses=None, selected_scenarios=None):
+def _build_scenario_cards(custom_summary, trace_summaries, scenario_statuses=None, selected_scenarios=None, system_summary=None):
     cards = []
     scenario_statuses = scenario_statuses or {}
     selected_scenarios = set(selected_scenarios or [])
+    system_summary = system_summary or {}
     for scenario in SCENARIO_DEFS:
         stats = custom_summary.get(scenario["key"])
         status_info = scenario_statuses.get(scenario["key"]) or {}
@@ -1694,6 +1749,7 @@ def _build_scenario_cards(custom_summary, trace_summaries, scenario_statuses=Non
         }
         scenario_status = status_info.get("status") or ("finished" if stats else ("not_run" if was_selected else "unknown"))
         scenario_reason = status_info.get("reason") or ("no metric emitted" if was_selected and not stats else "")
+        system_info = system_summary.get(scenario["key"]) or {}
         cards.append(
             {
                 "key": scenario["key"],
@@ -1703,6 +1759,7 @@ def _build_scenario_cards(custom_summary, trace_summaries, scenario_statuses=Non
                 "instruments": instruments,
                 "status": scenario_status,
                 "status_reason": scenario_reason,
+                "system": system_info,
             }
         )
     return cards
@@ -2050,7 +2107,7 @@ def _write_csv(path, payload):
             writer.writerow(["Device", device_info])
         writer.writerow([])
         writer.writerow(["Scenario Summary"])
-        writer.writerow(["Scenario", "Average (s)", "Min (s)", "Max (s)", "Runs"])
+        writer.writerow(["Scenario", "Average (s)", "Min (s)", "Max (s)", "Runs", "Thermal Max", "Mem Avg (MB)", "Sys Samples"])
         if scenario_cards:
             for card in scenario_cards:
                 timing = card.get("timing") or {}
@@ -2058,12 +2115,16 @@ def _write_csv(path, payload):
                 min_value = _fmt_num(timing.get("min"))
                 max_value = _fmt_num(timing.get("max"))
                 runs = timing.get("count", 0)
+                system = card.get("system") or {}
                 writer.writerow([
                     card.get("label", ""),
                     mean,
                     min_value,
                     max_value,
                     runs,
+                    system.get("thermal_max", ""),
+                    _fmt_num(system.get("mem_mb_mean")),
+                    system.get("samples", 0),
                 ])
         else:
             for metric, stats in summary.items():
@@ -2211,6 +2272,7 @@ def _write_html(path, payload):
         for card in scenario_cards:
             timing = card.get("timing") or {}
             instruments = card.get("instruments") or []
+            system = card.get("system") or {}
             html.append("<div class='scenario-card'>")
             html.append(f"<h2>{card.get('label')}</h2>")
             if card.get("description"):
@@ -2223,6 +2285,16 @@ def _write_html(path, payload):
             html.append(f"<div class='kv-box'><div class='kv-label'>Runs</div><div class='kv-value'>{timing.get('count', 0)}</div></div>")
             html.append(f"<div class='kv-box'><div class='kv-label'>Min</div><div class='kv-value'>{_html_escape(_fmt_time(timing.get('min')))}</div></div>")
             html.append(f"<div class='kv-box'><div class='kv-label'>Max</div><div class='kv-value'>{_html_escape(_fmt_time(timing.get('max')))}</div></div>")
+            if system:
+                thermal = system.get("thermal_max")
+                mem = system.get("mem_mb_mean")
+                samples = system.get("samples")
+                if thermal:
+                    html.append(f"<div class='kv-box'><div class='kv-label'>Thermal Max</div><div class='kv-value'>{_html_escape(thermal)}</div></div>")
+                if mem is not None:
+                    html.append(f"<div class='kv-box'><div class='kv-label'>Mem Avg (MB)</div><div class='kv-value'>{_html_escape(_fmt(mem))}</div></div>")
+                if samples:
+                    html.append(f"<div class='kv-box'><div class='kv-label'>Sys Samples</div><div class='kv-value'>{samples}</div></div>")
             html.append("</div>")
             html.append("<div class='metric-list'>")
             if instruments:
@@ -2469,6 +2541,7 @@ def main():
         "traces": {},
         "trace_summaries": {},
         "scenario_cards": [],
+        "system_summary": _summarize_system_snapshots(_parse_system_snapshots(args.log)),
         "logo_path": None,
         "xcresults": _discover_xcresults(args.xcresult_dir),
     }
@@ -2613,6 +2686,7 @@ def main():
         payload["trace_summaries"],
         payload.get("scenario_statuses"),
         payload.get("selected_scenarios"),
+        payload.get("system_summary"),
     )
 
     # Logo path (place logo at ../assets/performace_logo.png or .svg)

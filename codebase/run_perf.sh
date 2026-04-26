@@ -647,6 +647,8 @@ export PERF_APP_BUNDLE_ID="${PERF_APP_BUNDLE_ID}"
 export PERF_EMAIL="${PERF_EMAIL:-testjp100@test.com}"
 export PERF_PASSWORD="${PERF_PASSWORD:-Test1234}"
 export PERF_AD_BEHAVIOR="${PERF_AD_BEHAVIOR:-bypass}"
+export PERF_SYS_SNAPSHOT="${PERF_SYS_SNAPSHOT:-1}"
+export PERF_NETWORK_PROFILE="${PERF_NETWORK_PROFILE:-}"
 if [ -z "${INSTRUMENTS_PROCESS_NAME:-}" ]; then
   case "${PERF_APP:-qa}" in
     legacy)
@@ -658,11 +660,33 @@ if [ -z "${INSTRUMENTS_PROCESS_NAME:-}" ]; then
   esac
 fi
 export INSTRUMENTS_PROCESS_NAME
-export INSTRUMENTS="${INSTRUMENTS:-1}"
-export INSTRUMENTS_NETWORK="${INSTRUMENTS_NETWORK:-1}"
-export INSTRUMENTS_LEAKS="${INSTRUMENTS_LEAKS:-1}"
-export INSTRUMENTS_TIME_PROFILER="${INSTRUMENTS_TIME_PROFILER:-1}"
-export INSTRUMENTS_ALLOCATIONS="${INSTRUMENTS_ALLOCATIONS:-1}"
+PERF_FAST="${PERF_FAST:-0}"
+PERF_ANALYSIS="${PERF_ANALYSIS:-0}"
+if [ "$PERF_FAST" -eq 1 ]; then
+  export INSTRUMENTS=0
+  export INSTRUMENTS_NETWORK=0
+  export INSTRUMENTS_LEAKS=0
+  export INSTRUMENTS_TIME_PROFILER=0
+  export INSTRUMENTS_ALLOCATIONS=0
+  export INSTRUMENTS_ENERGY=0
+  export AUTO_OPEN_TRACES=0
+else
+  export INSTRUMENTS="${INSTRUMENTS:-1}"
+  export INSTRUMENTS_NETWORK="${INSTRUMENTS_NETWORK:-1}"
+  export INSTRUMENTS_LEAKS="${INSTRUMENTS_LEAKS:-1}"
+  export INSTRUMENTS_TIME_PROFILER="${INSTRUMENTS_TIME_PROFILER:-1}"
+  export INSTRUMENTS_ALLOCATIONS="${INSTRUMENTS_ALLOCATIONS:-1}"
+  export INSTRUMENTS_ENERGY="${INSTRUMENTS_ENERGY:-0}"
+fi
+
+if [ "$PERF_ANALYSIS" -eq 1 ]; then
+  export INSTRUMENTS=1
+  export INSTRUMENTS_NETWORK=1
+  export INSTRUMENTS_LEAKS=1
+  export INSTRUMENTS_TIME_PROFILER=1
+  export INSTRUMENTS_ALLOCATIONS=1
+  export INSTRUMENTS_ENERGY=1
+fi
 export PERF_REPEAT_COUNT="${TEST_ITERATIONS}"
 export AUTO_OPEN_RESULTS="${AUTO_OPEN_RESULTS:-1}"
 export AUTO_OPEN_TRACES="${AUTO_OPEN_TRACES:-1}"
@@ -673,6 +697,9 @@ write_run_context "$RUN_CONTEXT_PATH"
 cp "$SCRIPT_DIR/run_perf.sh" "$RESULTS_DIR/run_perf.snapshot.sh" >/dev/null 2>&1 || true
 echo "ℹ️  Runner revision: $SCRIPT_REVISION" | tee -a "$LOG_PATH"
 echo "ℹ️  Using PERF_APP=${PERF_APP:-} PERF_APP_BUNDLE_ID=${PERF_APP_BUNDLE_ID}" | tee -a "$LOG_PATH"
+if [ -n "${PERF_NETWORK_PROFILE:-}" ]; then
+  echo "PERF_NETWORK_PROFILE ${PERF_NETWORK_PROFILE}" | tee -a "$LOG_PATH"
+fi
 
 if ! ensure_target_app_available "$PERF_APP_BUNDLE_ID"; then
   exit 2
@@ -1355,8 +1382,8 @@ PY
     local probe_exit=0
     local record_target_args=()
 
-    case "$template_name" in
-      "Activity Monitor"|"Leaks"|"Network"|"Time Profiler"|"Allocations")
+	    case "$template_name" in
+	      "Activity Monitor"|"Leaks"|"Network"|"Time Profiler"|"Allocations"|"Energy Log")
         if [ -n "${INSTRUMENTS_PROCESS_NAME:-}" ]; then
           record_target_args=(
             --attach "$INSTRUMENTS_PROCESS_NAME"
@@ -1514,17 +1541,28 @@ PY
     trace_status "Leaks" "disabled"
   fi
 
-  if [ "${INSTRUMENTS_TIME_PROFILER:-1}" -eq 1 ]; then
-    trace_status "Time Profiler" "started"
-    if record_trace_with_probe "Time Profiler" "$TRACE_DIR/TimeProfiler.trace"; then
-      trace_status "Time Profiler" "captured"
-    else
-      trace_status "Time Profiler" "failed"
-    fi
-  else
-    echo "ℹ️ Time Profiler capture disabled for this run." | tee -a "$LOG_PATH"
-    trace_status "Time Profiler" "disabled"
-  fi
+	  if [ "${INSTRUMENTS_TIME_PROFILER:-1}" -eq 1 ]; then
+	    trace_status "Time Profiler" "started"
+	    if record_trace_with_probe "Time Profiler" "$TRACE_DIR/TimeProfiler.trace"; then
+	      trace_status "Time Profiler" "captured"
+	    else
+	      trace_status "Time Profiler" "failed"
+	    fi
+	  else
+	    echo "ℹ️ Time Profiler capture disabled for this run." | tee -a "$LOG_PATH"
+	    trace_status "Time Profiler" "disabled"
+	  fi
+
+	  if [ "${INSTRUMENTS_ENERGY:-0}" -eq 1 ]; then
+	    trace_status "Energy Log" "started"
+	    if record_trace_with_probe "Energy Log" "$TRACE_DIR/Energy.trace"; then
+	      trace_status "Energy Log" "captured"
+	    else
+	      trace_status "Energy Log" "failed"
+	    fi
+	  else
+	    trace_status "Energy Log" "disabled"
+	  fi
 
   if [ "${INSTRUMENTS_ALLOCATIONS:-1}" -eq 1 ]; then
     trace_status "Allocations" "started"

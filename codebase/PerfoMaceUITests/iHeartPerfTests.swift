@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import Darwin
 
 private enum PerfTestConfig {
     static let appBundleId = "PERF_APP_BUNDLE_ID"
@@ -54,6 +55,8 @@ class iHeartPerfTests: XCTestCase {
         static let repeatCount = "PERF_REPEAT_COUNT"
         /// One of: "bypass" (default), "fail"
         static let adBehavior = "PERF_AD_BEHAVIOR"
+        /// When set to "0", disables per-scenario system snapshots.
+        static let sysSnapshot = "PERF_SYS_SNAPSHOT"
     }
 
     private lazy var app: XCUIApplication = {
@@ -87,6 +90,11 @@ class iHeartPerfTests: XCTestCase {
     }
 
     private let albumSearchQuery = "Taylor Swift"
+
+    private var sysSnapshotsEnabled: Bool {
+        let raw = (ProcessInfo.processInfo.environment[Env.sysSnapshot] ?? "1").trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw != "0"
+    }
 
     private var isLegacyRun: Bool {
         #if PERF_APP_LEGACY
@@ -924,8 +932,12 @@ class iHeartPerfTests: XCTestCase {
     @discardableResult
     private func measureOnce(_ name: String, _ block: () -> Void) -> TimeInterval {
         emitScenarioEvent(name: name, state: "started")
+        emitSystemSnapshot(name: name, state: "started")
         let start = CFAbsoluteTimeGetCurrent()
-        defer { emitScenarioEvent(name: name, state: "finished") }
+        defer {
+            emitSystemSnapshot(name: name, state: "finished")
+            emitScenarioEvent(name: name, state: "finished")
+        }
         block()
         let duration = CFAbsoluteTimeGetCurrent() - start
         emitPerfMetric(name: name, duration: duration)
@@ -940,7 +952,11 @@ class iHeartPerfTests: XCTestCase {
         
         var duration: TimeInterval = 0
         emitScenarioEvent(name: name, state: "started")
-        defer { emitScenarioEvent(name: name, state: "finished") }
+        emitSystemSnapshot(name: name, state: "started")
+        defer {
+            emitSystemSnapshot(name: name, state: "finished")
+            emitScenarioEvent(name: name, state: "finished")
+        }
         measure(metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric(), XCTStorageMetric()], options: options) {
             startMeasuring()
             let start = CFAbsoluteTimeGetCurrent()
@@ -962,7 +978,11 @@ class iHeartPerfTests: XCTestCase {
         var duration: TimeInterval = 0
         var shouldEmitMetric = false
         emitScenarioEvent(name: name, state: "started")
-        defer { emitScenarioEvent(name: name, state: "finished") }
+        emitSystemSnapshot(name: name, state: "started")
+        defer {
+            emitSystemSnapshot(name: name, state: "finished")
+            emitScenarioEvent(name: name, state: "finished")
+        }
         measure(metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric(), XCTStorageMetric()], options: options) {
             startMeasuring()
             let start = CFAbsoluteTimeGetCurrent()
@@ -977,6 +997,47 @@ class iHeartPerfTests: XCTestCase {
 
         emitPerfMetric(name: name, duration: duration)
         return duration
+    }
+
+    private func emitSystemSnapshot(name: String, state: String) {
+        guard sysSnapshotsEnabled else { return }
+        let thermal = ProcessInfo.processInfo.thermalState
+        let thermalLabel: String
+        switch thermal {
+        case .nominal: thermalLabel = "nominal"
+        case .fair: thermalLabel = "fair"
+        case .serious: thermalLabel = "serious"
+        case .critical: thermalLabel = "critical"
+        @unknown default: thermalLabel = "unknown"
+        }
+
+        let device = XCUIDevice.shared
+        device.isBatteryMonitoringEnabled = true
+        let batteryLevel = device.batteryLevel
+        let batteryLevelLabel = batteryLevel < 0 ? "unknown" : String(format: "%.2f", batteryLevel)
+        let batteryStateLabel: String
+        switch device.batteryState {
+        case .charging: batteryStateLabel = "charging"
+        case .full: batteryStateLabel = "full"
+        case .unplugged: batteryStateLabel = "unplugged"
+        @unknown default: batteryStateLabel = "unknown"
+        }
+
+        let memMB = currentMemoryFootprintMB()
+        let memLabel = memMB == nil ? "unknown" : String(format: "%.1f", memMB!)
+        print("SYS_SNAPSHOT scenario=\(name) state=\(state) thermal=\(thermalLabel) batteryLevel=\(batteryLevelLabel) batteryState=\(batteryStateLabel) memMB=\(memLabel)")
+    }
+
+    private func currentMemoryFootprintMB() -> Double? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout.size(ofValue: info) / MemoryLayout<natural_t>.size)
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { ptr in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), ptr, &count)
+            }
+        }
+        guard kerr == KERN_SUCCESS else { return nil }
+        return Double(info.phys_footprint) / 1048576.0
     }
 
     private func emitScenarioEvent(name: String, state: String) {
