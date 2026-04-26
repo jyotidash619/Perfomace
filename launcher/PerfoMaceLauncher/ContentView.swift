@@ -1221,18 +1221,34 @@ struct ContentView: View {
     private var reportTab: some View {
         VStack(spacing: 0) {
             HStack {
-                viewToggle
                 Text(config.appChoice == .compare ? "Compared Report" : "Report")
-                    .font(.system(size: 16, weight: .semibold, design: .default))
+                    .font(.system(size: 14, weight: .semibold, design: .default))
+                    .foregroundStyle(textPrimary)
                 Spacer()
-                Button("Reload") {
+                Button {
                     loadReportIfPresent()
                     reportReloadToken += 1
+                } label: {
+                    Label("Reload", systemImage: "arrow.clockwise")
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 13, weight: .semibold, design: .default))
+                        .foregroundStyle(textPrimary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(surface)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(border, lineWidth: 1)
+                                )
+                        )
                 }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal)
             .padding(.vertical, 10)
-            .background(.white.opacity(0.55))
+            .background(.ultraThinMaterial)
 
             Divider()
 
