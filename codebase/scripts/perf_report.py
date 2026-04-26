@@ -1837,6 +1837,21 @@ def _trace_sidecar_exists(traces_dir, trace_name):
             "Animation_Hitches.log",
             "AnimationHitches.log",
         ],
+        "System Trace": [
+            "System_Trace.log",
+            "SystemTrace.log",
+        ],
+        "App Launch": [
+            "App_Launch.log",
+            "AppLaunch.log",
+        ],
+        "Swift Concurrency": [
+            "Swift_Concurrency.log",
+            "SwiftConcurrency.log",
+        ],
+        "Logging": [
+            "Logging.log",
+        ],
         "Network": [
             "Network.log",
             "Network.export.log",
@@ -2625,6 +2640,10 @@ def main():
         allocations_trace = os.path.join(traces_dir, "Allocations.trace")
         energy_trace = os.path.join(traces_dir, "PowerProfiler.trace")
         hitches_trace = os.path.join(traces_dir, "AnimationHitches.trace")
+        system_trace = os.path.join(traces_dir, "SystemTrace.trace")
+        app_launch_trace = os.path.join(traces_dir, "AppLaunch.trace")
+        swift_concurrency_trace = os.path.join(traces_dir, "SwiftConcurrency.trace")
+        logging_trace = os.path.join(traces_dir, "Logging.trace")
         leaks_trace = os.path.join(traces_dir, "Leaks.trace")
         network_trace = os.path.join(traces_dir, "Network.trace")
         if (os.path.exists(activity_monitor_trace) or _trace_sidecar_exists(traces_dir, "ActivityMonitor")) and (
@@ -2687,6 +2706,39 @@ def main():
             if hitches_summary:
                 payload["traces"]["Animation Hitches"] = hitches_trace
                 payload["trace_summaries"]["Animation Hitches"] = hitches_summary
+
+        # The templates below don't always export stable numeric tables; we still surface health + errors.
+        if (os.path.exists(system_trace) or _trace_sidecar_exists(traces_dir, "System Trace")) and (
+            _trace_recorded_this_run("SystemTrace.trace") or _trace_sidecar_exists(traces_dir, "System Trace")
+        ):
+            payload["traces"]["System Trace"] = system_trace
+            payload["trace_summaries"]["System Trace"] = _trace_summary(
+                system_trace, "activity", process_name=process_name, process_bundle_id=process_bundle_id
+            ) or {"health": _inspect_trace_bundle(system_trace)}
+
+        if (os.path.exists(app_launch_trace) or _trace_sidecar_exists(traces_dir, "App Launch")) and (
+            _trace_recorded_this_run("AppLaunch.trace") or _trace_sidecar_exists(traces_dir, "App Launch")
+        ):
+            payload["traces"]["App Launch"] = app_launch_trace
+            payload["trace_summaries"]["App Launch"] = _trace_summary(
+                app_launch_trace, "activity", process_name=process_name, process_bundle_id=process_bundle_id
+            ) or {"health": _inspect_trace_bundle(app_launch_trace)}
+
+        if (os.path.exists(swift_concurrency_trace) or _trace_sidecar_exists(traces_dir, "Swift Concurrency")) and (
+            _trace_recorded_this_run("SwiftConcurrency.trace") or _trace_sidecar_exists(traces_dir, "Swift Concurrency")
+        ):
+            payload["traces"]["Swift Concurrency"] = swift_concurrency_trace
+            payload["trace_summaries"]["Swift Concurrency"] = _trace_summary(
+                swift_concurrency_trace, "activity", process_name=process_name, process_bundle_id=process_bundle_id
+            ) or {"health": _inspect_trace_bundle(swift_concurrency_trace)}
+
+        if (os.path.exists(logging_trace) or _trace_sidecar_exists(traces_dir, "Logging")) and (
+            _trace_recorded_this_run("Logging.trace") or _trace_sidecar_exists(traces_dir, "Logging")
+        ):
+            payload["traces"]["Logging"] = logging_trace
+            payload["trace_summaries"]["Logging"] = _trace_summary(
+                logging_trace, "activity", process_name=process_name, process_bundle_id=process_bundle_id
+            ) or {"health": _inspect_trace_bundle(logging_trace)}
         if (os.path.exists(leaks_trace) or _trace_sidecar_exists(traces_dir, "Leaks")) and (
             _trace_recorded_this_run("Leaks.trace") or _trace_sidecar_exists(traces_dir, "Leaks")
         ):

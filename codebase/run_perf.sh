@@ -670,6 +670,10 @@ if [ "$PERF_FAST" -eq 1 ]; then
   export INSTRUMENTS_ALLOCATIONS=0
   export INSTRUMENTS_ENERGY=0
   export INSTRUMENTS_HITCHES=0
+  export INSTRUMENTS_SYSTEM_TRACE=0
+  export INSTRUMENTS_APP_LAUNCH=0
+  export INSTRUMENTS_SWIFT_CONCURRENCY=0
+  export INSTRUMENTS_LOGGING=0
   export AUTO_OPEN_TRACES=0
 else
   export INSTRUMENTS="${INSTRUMENTS:-1}"
@@ -679,6 +683,10 @@ else
   export INSTRUMENTS_ALLOCATIONS="${INSTRUMENTS_ALLOCATIONS:-1}"
   export INSTRUMENTS_ENERGY="${INSTRUMENTS_ENERGY:-0}"
   export INSTRUMENTS_HITCHES="${INSTRUMENTS_HITCHES:-0}"
+  export INSTRUMENTS_SYSTEM_TRACE="${INSTRUMENTS_SYSTEM_TRACE:-0}"
+  export INSTRUMENTS_APP_LAUNCH="${INSTRUMENTS_APP_LAUNCH:-0}"
+  export INSTRUMENTS_SWIFT_CONCURRENCY="${INSTRUMENTS_SWIFT_CONCURRENCY:-0}"
+  export INSTRUMENTS_LOGGING="${INSTRUMENTS_LOGGING:-0}"
 fi
 
 if [ "$PERF_ANALYSIS" -eq 1 ]; then
@@ -689,6 +697,10 @@ if [ "$PERF_ANALYSIS" -eq 1 ]; then
   export INSTRUMENTS_ALLOCATIONS=1
   export INSTRUMENTS_ENERGY=1
   export INSTRUMENTS_HITCHES=1
+  export INSTRUMENTS_SYSTEM_TRACE=1
+  export INSTRUMENTS_APP_LAUNCH=1
+  export INSTRUMENTS_SWIFT_CONCURRENCY=1
+  export INSTRUMENTS_LOGGING=1
 fi
 export PERF_REPEAT_COUNT="${TEST_ITERATIONS}"
 export AUTO_OPEN_RESULTS="${AUTO_OPEN_RESULTS:-1}"
@@ -1386,7 +1398,7 @@ PY
     local record_target_args=()
 
 	    case "$template_name" in
-	      "Activity Monitor"|"Leaks"|"Network"|"Time Profiler"|"Allocations"|"Power Profiler"|"Animation Hitches")
+	      "Activity Monitor"|"Leaks"|"Network"|"Time Profiler"|"Allocations"|"Power Profiler"|"Animation Hitches"|"System Trace"|"App Launch"|"Swift Concurrency"|"Logging")
         if [ -n "${INSTRUMENTS_PROCESS_NAME:-}" ]; then
           record_target_args=(
             --attach "$INSTRUMENTS_PROCESS_NAME"
@@ -1576,6 +1588,50 @@ PY
 	    fi
 	  else
 	    trace_status "Animation Hitches" "disabled"
+	  fi
+
+	  if [ "${INSTRUMENTS_SYSTEM_TRACE:-0}" -eq 1 ]; then
+	    trace_status "System Trace" "started"
+	    if record_trace_with_probe "System Trace" "$TRACE_DIR/SystemTrace.trace"; then
+	      trace_status "System Trace" "captured"
+	    else
+	      trace_status "System Trace" "failed"
+	    fi
+	  else
+	    trace_status "System Trace" "disabled"
+	  fi
+
+	  if [ "${INSTRUMENTS_APP_LAUNCH:-0}" -eq 1 ]; then
+	    trace_status "App Launch" "started"
+	    if record_trace_with_probe "App Launch" "$TRACE_DIR/AppLaunch.trace"; then
+	      trace_status "App Launch" "captured"
+	    else
+	      trace_status "App Launch" "failed"
+	    fi
+	  else
+	    trace_status "App Launch" "disabled"
+	  fi
+
+	  if [ "${INSTRUMENTS_SWIFT_CONCURRENCY:-0}" -eq 1 ]; then
+	    trace_status "Swift Concurrency" "started"
+	    if record_trace_with_probe "Swift Concurrency" "$TRACE_DIR/SwiftConcurrency.trace"; then
+	      trace_status "Swift Concurrency" "captured"
+	    else
+	      trace_status "Swift Concurrency" "failed"
+	    fi
+	  else
+	    trace_status "Swift Concurrency" "disabled"
+	  fi
+
+	  if [ "${INSTRUMENTS_LOGGING:-0}" -eq 1 ]; then
+	    trace_status "Logging" "started"
+	    if record_trace_with_probe "Logging" "$TRACE_DIR/Logging.trace"; then
+	      trace_status "Logging" "captured"
+	    else
+	      trace_status "Logging" "failed"
+	    fi
+	  else
+	    trace_status "Logging" "disabled"
 	  fi
 
   if [ "${INSTRUMENTS_ALLOCATIONS:-1}" -eq 1 ]; then
