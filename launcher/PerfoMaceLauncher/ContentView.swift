@@ -14,6 +14,11 @@ struct ContentView: View {
     @State private var didAutoDetect: Bool = false
     @State private var detailTab: DetailTab = .report
     @State private var showReadyChecks: Bool = false
+    @State private var showCodebaseSection: Bool = true
+    @State private var showSetupSection: Bool = true
+    @State private var showAppSection: Bool = true
+    @State private var showScenariosSection: Bool = true
+    @State private var showAdvancedSection: Bool = false
 
     private let repeatFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
@@ -24,8 +29,9 @@ struct ContentView: View {
     }()
 
     // Premium dark SaaS theme tokens.
-    private let appBg = Color(red: 0.06, green: 0.07, blue: 0.08) // #0F1115
-    private let surface = Color(red: 0.11, green: 0.12, blue: 0.16) // #1B1F2A
+    // Slightly lifted dark theme (less pitch-black) + crimson accent.
+    private let appBg = Color(red: 0.07, green: 0.08, blue: 0.10) // ~#11151A
+    private let surface = Color(red: 0.12, green: 0.13, blue: 0.17) // ~#1F2230
     private let border = Color(red: 0.16, green: 0.18, blue: 0.23) // #2A2F3A
     private let textPrimary = Color(red: 0.90, green: 0.92, blue: 0.95) // #E6EAF2
     private let textSecondary = Color(red: 0.60, green: 0.64, blue: 0.70) // #9AA4B2
@@ -34,7 +40,7 @@ struct ContentView: View {
     private let warmGold = Color(red: 0.11, green: 0.12, blue: 0.16)
     private let mist = Color(red: 0.16, green: 0.18, blue: 0.23)
 
-    private let sapphire = Color(red: 0.36, green: 0.42, blue: 0.75) // #5C6BC0
+    private let sapphire = Color(red: 0.86, green: 0.11, blue: 0.20) // crimson
     private let success = Color(red: 0.13, green: 0.77, blue: 0.37) // #22C55E
     private let warning = Color(red: 0.96, green: 0.62, blue: 0.04) // #F59E0B
     private let rose = Color(red: 0.94, green: 0.27, blue: 0.27) // #EF4444
@@ -154,193 +160,7 @@ struct ContentView: View {
         NavigationSplitView {
             ZStack(alignment: .topLeading) {
                 sidebarBackground
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        header
-                        runSummaryStrip
-
-                        GroupBox("Codebase") {
-                            VStack(alignment: .leading, spacing: 10) {
-                                TextField("PerfoMace codebase (contains run_perf.sh)", text: $projectPath)
-                                    .textFieldStyle(.roundedBorder)
-                                HStack {
-                                    Spacer()
-                                    Button("Browse…") { browseForProject() }
-                                        .buttonStyle(.bordered)
-                                        .tint(sapphire)
-                                }
-                            }
-                        }
-                        .groupBoxStyle(CardGroupBoxStyle())
-
-                        GroupBox("Setup Readiness") {
-                            setupReadinessCard
-                        }
-                        .groupBoxStyle(CardGroupBoxStyle())
-
-                        GroupBox("App") {
-                            Picker("Target", selection: $config.appChoice) {
-                                ForEach(RunConfiguration.AppChoice.allCases) { choice in
-                                    Text(choice.displayName).tag(choice)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            if config.appChoice == .custom {
-                                TextField("Bundle id", text: $config.customBundleId)
-                                    .textFieldStyle(.roundedBorder)
-                            } else if config.appChoice == .combine {
-                                Text("Runs Re-Write -> Legacy once, then builds a comparison report with multi-view graphs.")
-                                    .font(.system(size: 11, weight: .medium, design: .default))
-                                    .foregroundStyle(.secondary)
-                            } else if config.appChoice == .compare {
-                                VStack(alignment: .leading, spacing: 12) {
-                                    compareSourceRow(
-                                        title: "Re-Write / Baseline",
-                                        subtitle: "Recommended: pick a QA_PerfoMace_<timestamp> folder",
-                                        url: compareBaselineURL,
-                                        validationError: baselineCompareError,
-                                        resolvedStatus: runner.comparisonSelectionResolvedLabel(for: compareBaselineURL, expectedAppChoice: .qa),
-                                        browseAction: { browseForCompareFile(role: .baseline) },
-                                        clearAction: { compareBaselineURL = nil }
-                                    )
-                                    compareSourceRow(
-                                        title: "Legacy / Candidate",
-                                        subtitle: "Recommended: pick a Legacy_PerfoMace_<timestamp> folder",
-                                        url: compareCandidateURL,
-                                        validationError: candidateCompareError,
-                                        resolvedStatus: runner.comparisonSelectionResolvedLabel(for: compareCandidateURL, expectedAppChoice: .legacy),
-                                        browseAction: { browseForCompareFile(role: .candidate) },
-                                        clearAction: { compareCandidateURL = nil }
-                                    )
-                                    Text("Best option: choose the whole QA_PerfoMace_<timestamp> or Legacy_PerfoMace_<timestamp> run folders. File picks still work if the matching PerformanceReport.json sits beside them.")
-                                        .font(.system(size: 11, weight: .medium, design: .default))
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        .groupBoxStyle(CardGroupBoxStyle())
-
-                        if config.appChoice != .compare {
-                        GroupBox("Scenarios") {
-                            VStack(alignment: .leading, spacing: 12) {
-                                HStack {
-                                    Text("Choose exactly which measured scenarios to run.")
-                                        .font(.system(size: 11, weight: .medium, design: .default))
-                                        .foregroundStyle(textSecondary)
-                                    Spacer()
-                                    Button("All") {
-                                        config.selectedScenarios = Set(RunConfiguration.Scenario.allCases)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                    Button("Clear") {
-                                        config.selectedScenarios = []
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                }
-
-                                LazyVGrid(columns: [
-                                    GridItem(.flexible(), spacing: 12, alignment: .leading),
-                                    GridItem(.flexible(), spacing: 12, alignment: .leading),
-                                    GridItem(.flexible(), spacing: 12, alignment: .leading),
-                                ], alignment: .leading, spacing: 12) {
-                                    ForEach(RunConfiguration.Scenario.allCases) { scenario in
-                                        ScenarioTile(
-                                            title: scenario.displayName,
-                                            icon: scenarioIconName(scenario),
-                                            isOn: scenarioBinding(scenario),
-                                            accent: sapphire
-                                        )
-                                    }
-                                }
-
-                                Text("Fresh-state prep stays automatic when needed. It is not counted as one of these scenarios.")
-                                    .font(.system(size: 10.5, weight: .regular, design: .default))
-                                    .foregroundStyle(textMuted)
-                            }
-                        }
-                        .groupBoxStyle(CardGroupBoxStyle())
-                        }
-
-                        if config.appChoice != .compare {
-                        GroupBox("Advanced") {
-                            HStack(alignment: .top, spacing: 14) {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Credentials")
-                                        .font(.system(size: 12, weight: .semibold, design: .default))
-                                        .foregroundStyle(deepSapphire.opacity(0.72))
-                                        .textCase(.uppercase)
-                                        .tracking(0.9)
-
-                                    TextField("Email", text: $config.email)
-                                        .textFieldStyle(.roundedBorder)
-                                    SecureField("Password", text: $config.password)
-                                        .textFieldStyle(.roundedBorder)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .topLeading)
-
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Run options")
-                                        .font(.system(size: 12, weight: .semibold, design: .default))
-                                        .foregroundStyle(deepSapphire.opacity(0.72))
-                                        .textCase(.uppercase)
-                                        .tracking(0.9)
-
-                                    Toggle("Strict ads", isOn: $config.strictAds)
-                                        .toggleStyle(.switch)
-                                    Toggle("Reset simulator", isOn: $config.resetSimulator)
-                                        .toggleStyle(.switch)
-                                    Toggle("Time Profiler", isOn: $config.instrumentsTimeProfiler)
-                                        .toggleStyle(.switch)
-                                    Toggle("Allocations", isOn: $config.instrumentsAllocations)
-                                        .toggleStyle(.switch)
-                                    Toggle("Network tracing", isOn: $config.instrumentsNetwork)
-                                        .toggleStyle(.switch)
-                                    Toggle("Leaks tracing", isOn: $config.instrumentsLeaks)
-                                        .toggleStyle(.switch)
-                                    Toggle("Zip results", isOn: $config.zipResults)
-                                        .toggleStyle(.switch)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .topLeading)
-                            }
-
-                            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Repeat / Iteration")
-                                        .font(.system(size: 12, weight: .semibold, design: .default))
-                                        .foregroundStyle(deepSapphire.opacity(0.72))
-                                        .textCase(.uppercase)
-                                        .tracking(0.9)
-                                    Text("Repeat count.")
-                                        .font(.system(size: 11, weight: .regular, design: .default))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                HStack(spacing: 8) {
-                                    TextField("1", value: $config.repeatCount, formatter: repeatFormatter)
-                                        .frame(width: 56)
-                                        .textFieldStyle(.roundedBorder)
-                                    Stepper("", value: $config.repeatCount, in: 1...25)
-                                        .labelsHidden()
-                                }
-                                .frame(width: 100, alignment: .trailing)
-                            }
-                            .padding(.top, 4)
-                        }
-                        .groupBoxStyle(CardGroupBoxStyle())
-                        }
-
-                    }
-                    .padding(16)
-                    .frame(minWidth: 500, maxWidth: 820, alignment: .leading)
-                }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    sidebarFooter
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                }
+                sidebarContent
             }
             .navigationSplitViewColumnWidth(min: 500, ideal: 560, max: 620)
         } detail: {
@@ -633,6 +453,193 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
                 .tint(sapphire)
                 .disabled(projectRoot == nil || runner.isCheckingSetup || config.appChoice == .compare)
+            }
+        }
+    }
+
+    private var sidebarContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                header
+                runSummaryStrip
+                codebaseSection
+                setupSection
+                appSection
+                if config.appChoice != .compare {
+                    scenariosSection
+                    advancedSection
+                }
+            }
+            .padding(14)
+            .frame(minWidth: 500, maxWidth: 820, alignment: .leading)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            sidebarFooter
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+        }
+    }
+
+    private var codebaseSection: some View {
+        CollapsibleCard(title: "Codebase", isExpanded: $showCodebaseSection) {
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("PerfoMace codebase (contains run_perf.sh)", text: $projectPath)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("Browse…") { browseForProject() }
+                        .buttonStyle(.bordered)
+                        .tint(sapphire)
+                        .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private var setupSection: some View {
+        CollapsibleCard(title: "Setup", isExpanded: $showSetupSection) {
+            setupReadinessCard
+        }
+    }
+
+    private var appSection: some View {
+        CollapsibleCard(title: "Setup Target", isExpanded: $showAppSection) {
+            Picker("Target", selection: $config.appChoice) {
+                ForEach(RunConfiguration.AppChoice.allCases) { choice in
+                    Text(choice.displayName).tag(choice)
+                }
+            }
+            .pickerStyle(.segmented)
+            if config.appChoice == .custom {
+                TextField("Bundle id", text: $config.customBundleId)
+                    .textFieldStyle(.roundedBorder)
+            } else if config.appChoice == .combine {
+                Text("Runs Re-Write -> Legacy once, then builds a comparison report with multi-view graphs.")
+                    .font(.system(size: 11, weight: .medium, design: .default))
+                    .foregroundStyle(.secondary)
+            } else if config.appChoice == .compare {
+                VStack(alignment: .leading, spacing: 12) {
+                    compareSourceRow(
+                        title: "Re-Write / Baseline",
+                        subtitle: "Recommended: pick a QA_PerfoMace_<timestamp> folder",
+                        url: compareBaselineURL,
+                        validationError: baselineCompareError,
+                        resolvedStatus: runner.comparisonSelectionResolvedLabel(for: compareBaselineURL, expectedAppChoice: .qa),
+                        browseAction: { browseForCompareFile(role: .baseline) },
+                        clearAction: { compareBaselineURL = nil }
+                    )
+                    compareSourceRow(
+                        title: "Legacy / Candidate",
+                        subtitle: "Recommended: pick a Legacy_PerfoMace_<timestamp> folder",
+                        url: compareCandidateURL,
+                        validationError: candidateCompareError,
+                        resolvedStatus: runner.comparisonSelectionResolvedLabel(for: compareCandidateURL, expectedAppChoice: .legacy),
+                        browseAction: { browseForCompareFile(role: .candidate) },
+                        clearAction: { compareCandidateURL = nil }
+                    )
+                    Text("Best option: choose the whole QA_PerfoMace_<timestamp> or Legacy_PerfoMace_<timestamp> run folders. File picks still work if the matching PerformanceReport.json sits beside them.")
+                        .font(.system(size: 11, weight: .medium, design: .default))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var scenariosSection: some View {
+        CollapsibleCard(title: "Scenarios", isExpanded: $showScenariosSection) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Choose exactly which measured scenarios to run.")
+                        .font(.system(size: 11, weight: .medium, design: .default))
+                        .foregroundStyle(textSecondary)
+                    Spacer()
+                    Button("All") { config.selectedScenarios = Set(RunConfiguration.Scenario.allCases) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    Button("Clear") { config.selectedScenarios = [] }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 10, alignment: .leading),
+                    GridItem(.flexible(), spacing: 10, alignment: .leading),
+                ], alignment: .leading, spacing: 10) {
+                    ForEach(RunConfiguration.Scenario.allCases) { scenario in
+                        ScenarioTile(
+                            title: scenario.displayName,
+                            icon: scenarioIconName(scenario),
+                            isOn: scenarioBinding(scenario),
+                            accent: sapphire
+                        )
+                    }
+                }
+
+                Text("Fresh-state prep stays automatic when needed. It is not counted as one of these scenarios.")
+                    .font(.system(size: 10.5, weight: .regular, design: .default))
+                    .foregroundStyle(textMuted)
+            }
+        }
+    }
+
+    private var advancedSection: some View {
+        CollapsibleCard(title: "Advanced", isExpanded: $showAdvancedSection) {
+            VStack(spacing: 10) {
+                HStack(alignment: .top, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Credentials")
+                            .font(.system(size: 12, weight: .semibold, design: .default))
+                            .foregroundStyle(deepSapphire.opacity(0.72))
+                            .textCase(.uppercase)
+                            .tracking(0.9)
+
+                        TextField("Email", text: $config.email)
+                            .textFieldStyle(.roundedBorder)
+                        SecureField("Password", text: $config.password)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Run options")
+                            .font(.system(size: 12, weight: .semibold, design: .default))
+                            .foregroundStyle(deepSapphire.opacity(0.72))
+                            .textCase(.uppercase)
+                            .tracking(0.9)
+
+                        Toggle("Strict ads", isOn: $config.strictAds).toggleStyle(.switch)
+                        Toggle("Reset simulator", isOn: $config.resetSimulator).toggleStyle(.switch)
+                        Toggle("Time Profiler", isOn: $config.instrumentsTimeProfiler).toggleStyle(.switch)
+                        Toggle("Allocations", isOn: $config.instrumentsAllocations).toggleStyle(.switch)
+                        Toggle("Network tracing", isOn: $config.instrumentsNetwork).toggleStyle(.switch)
+                        Toggle("Leaks tracing", isOn: $config.instrumentsLeaks).toggleStyle(.switch)
+                        Toggle("Zip results", isOn: $config.zipResults).toggleStyle(.switch)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Repeat / Iteration")
+                            .font(.system(size: 12, weight: .semibold, design: .default))
+                            .foregroundStyle(deepSapphire.opacity(0.72))
+                            .textCase(.uppercase)
+                            .tracking(0.9)
+                        Text("Repeat count.")
+                            .font(.system(size: 11, weight: .regular, design: .default))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    HStack(spacing: 8) {
+                        TextField("1", value: $config.repeatCount, formatter: repeatFormatter)
+                            .frame(width: 56)
+                            .textFieldStyle(.roundedBorder)
+                        Stepper("", value: $config.repeatCount, in: 1...25)
+                            .labelsHidden()
+                    }
+                    .frame(width: 100, alignment: .trailing)
+                }
+                .padding(.top, 2)
             }
         }
     }
@@ -2173,7 +2180,7 @@ private struct ScenarioTile: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 12.5, weight: .semibold, design: .default))
+                        .font(.system(size: 12, weight: .semibold, design: .default))
                         .foregroundStyle(textPrimary)
                         .lineLimit(1)
                     Text(isOn ? "Selected" : "Off")
@@ -2192,7 +2199,8 @@ private struct ScenarioTile: View {
                 }
                 .frame(width: 26, height: 26)
             }
-            .padding(12)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 10)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(surface)
@@ -2220,11 +2228,11 @@ private struct TraceLaneChip: View {
     let subtitle: String
 
     @State private var pulse = false
-    private let sapphire = Color(red: 0.05, green: 0.26, blue: 0.60)
+    private let sapphire = Color(red: 0.86, green: 0.11, blue: 0.20)
     private let deepSapphire = Color(red: 0.04, green: 0.14, blue: 0.35)
     private let rose = Color(red: 0.80, green: 0.23, blue: 0.27)
-    private let surfaceFill = Color.white
-    private let surfaceBorder = Color(red: 0.86, green: 0.89, blue: 0.93)
+    private let surfaceFill = Color(red: 0.12, green: 0.13, blue: 0.17)
+    private let surfaceBorder = Color(red: 0.16, green: 0.18, blue: 0.23)
 
     private var isLive: Bool {
         switch state.lowercased() {
@@ -2605,6 +2613,49 @@ struct CardGroupBoxStyle: GroupBoxStyle {
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(red: 0.11, green: 0.12, blue: 0.16))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color(red: 0.16, green: 0.18, blue: 0.23), lineWidth: 1)
+                )
+        )
+        .shadow(color: Color.black.opacity(0.25), radius: 20, x: 0, y: 6)
+    }
+}
+
+private struct CollapsibleCard<Content: View>: View {
+    let title: String
+    @Binding var isExpanded: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 12, weight: .semibold, design: .default))
+                        .foregroundStyle(Color(red: 0.60, green: 0.64, blue: 0.70))
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .semibold, design: .default))
+                        .foregroundStyle(Color(red: 0.90, green: 0.92, blue: 0.95))
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                content()
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(red: 0.12, green: 0.13, blue: 0.17))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .stroke(Color(red: 0.16, green: 0.18, blue: 0.23), lineWidth: 1)
