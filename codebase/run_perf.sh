@@ -804,7 +804,7 @@ scenario_selected() {
 }
 
 selected_requires_preflight() {
-  for key in login tab_switch_journey search image_loading radio_play_start podcast_play_start playlist_play_start radio_scroll logout; do
+  for key in login tab_switch_journey search image_loading radio_play_start podcast_play_start playlist_play_start radio_scroll warm_start_30s background_foreground_cycle mini_to_full_player skip_burst logout; do
     if scenario_selected "$key"; then
       return 0
     fi
@@ -833,6 +833,10 @@ scenario_selected radio_play_start && CONTENT_TEST_ARGS+=(-only-testing:PerfoMac
 scenario_selected podcast_play_start && CONTENT_TEST_ARGS+=(-only-testing:PerfoMaceUITests/iHeartPerfTests/testPodcastTabLoad)
 scenario_selected playlist_play_start && CONTENT_TEST_ARGS+=(-only-testing:PerfoMaceUITests/iHeartPerfTests/testPlaylistLoad)
 scenario_selected radio_scroll && CONTENT_TEST_ARGS+=(-only-testing:PerfoMaceUITests/iHeartPerfTests/testRadioScrollPerformance)
+scenario_selected warm_start_30s && CONTENT_TEST_ARGS+=(-only-testing:PerfoMaceUITests/iHeartPerfTests/testWarmStart30s)
+scenario_selected background_foreground_cycle && CONTENT_TEST_ARGS+=(-only-testing:PerfoMaceUITests/iHeartPerfTests/testBackgroundForegroundCycle)
+scenario_selected mini_to_full_player && CONTENT_TEST_ARGS+=(-only-testing:PerfoMaceUITests/iHeartPerfTests/testMiniToFullPlayerTransition)
+scenario_selected skip_burst && CONTENT_TEST_ARGS+=(-only-testing:PerfoMaceUITests/iHeartPerfTests/testSkipBurst)
 
 LOGOUT_TEST_ARGS=()
 scenario_selected logout && LOGOUT_TEST_ARGS+=(-only-testing:PerfoMaceUITests/iHeartPerfTests/testLogoutSpeed)
@@ -875,6 +879,10 @@ append_selected_report_scenario radio_play_start RadioPlayStart
 append_selected_report_scenario podcast_play_start PodcastPlayStart
 append_selected_report_scenario playlist_play_start PlaylistPlayStart
 append_selected_report_scenario radio_scroll RadioScroll
+append_selected_report_scenario warm_start_30s WarmStart30s
+append_selected_report_scenario background_foreground_cycle BackgroundForegroundCycle
+append_selected_report_scenario mini_to_full_player MiniToFullPlayer
+append_selected_report_scenario skip_burst SkipBurst
 append_selected_report_scenario logout Logout
 
 SELECTED_REPORT_SCENARIOS_CSV="$(IFS=,; echo "${SELECTED_REPORT_SCENARIOS[*]}")"
@@ -884,6 +892,8 @@ FULL_SCENARIO_SELECTION=1
 for scenario_key in \
   cold_launch \
   warm_resume \
+  warm_start_30s \
+  background_foreground_cycle \
   login \
   tab_switch_journey \
   search \
@@ -892,6 +902,8 @@ for scenario_key in \
   podcast_play_start \
   playlist_play_start \
   radio_scroll \
+  mini_to_full_player \
+  skip_burst \
   logout; do
   if ! scenario_selected "$scenario_key"; then
     FULL_SCENARIO_SELECTION=0

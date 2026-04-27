@@ -972,6 +972,10 @@ struct ContentView: View {
             return "bolt.fill"
         case .warmResume:
             return "arrow.triangle.2.circlepath"
+        case .warmStart30s:
+            return "timer"
+        case .backgroundForegroundCycle:
+            return "arrow.up.arrow.down.square"
         case .login:
             return "person.crop.circle.badge.checkmark"
         case .tabSwitchJourney:
@@ -988,6 +992,10 @@ struct ContentView: View {
             return "music.note.list"
         case .radioScroll:
             return "scroll"
+        case .miniToFullPlayer:
+            return "arrow.up.left.and.arrow.down.right"
+        case .skipBurst:
+            return "forward.fill"
         case .logout:
             return "person.crop.circle.badge.xmark"
         }

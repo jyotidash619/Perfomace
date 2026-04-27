@@ -5,6 +5,8 @@ struct RunConfiguration: Sendable {
     enum Scenario: String, CaseIterable, Hashable, Identifiable, Sendable {
         case coldLaunch = "cold_launch"
         case warmResume = "warm_resume"
+        case warmStart30s = "warm_start_30s"
+        case backgroundForegroundCycle = "background_foreground_cycle"
         case login = "login"
         case tabSwitchJourney = "tab_switch_journey"
         case search = "search"
@@ -13,6 +15,8 @@ struct RunConfiguration: Sendable {
         case podcastPlayStart = "podcast_play_start"
         case playlistPlayStart = "playlist_play_start"
         case radioScroll = "radio_scroll"
+        case miniToFullPlayer = "mini_to_full_player"
+        case skipBurst = "skip_burst"
         case logout = "logout"
 
         var id: String { rawValue }
@@ -21,6 +25,8 @@ struct RunConfiguration: Sendable {
             switch self {
             case .coldLaunch: "Cold Launch"
             case .warmResume: "Warm Resume"
+            case .warmStart30s: "Warm Start (<30s)"
+            case .backgroundForegroundCycle: "BG/FG Cycle"
             case .login: "Login"
             case .tabSwitchJourney: "Tab Switch Journey"
             case .search: "Search"
@@ -29,6 +35,8 @@ struct RunConfiguration: Sendable {
             case .podcastPlayStart: "Podcast Play Start"
             case .playlistPlayStart: "Playlist Play Start"
             case .radioScroll: "Radio Scroll"
+            case .miniToFullPlayer: "Mini → Full Player"
+            case .skipBurst: "Skip Burst"
             case .logout: "Logout"
             }
         }
@@ -95,6 +103,10 @@ struct RunConfiguration: Sendable {
             || selectedScenarios.contains(.podcastPlayStart)
             || selectedScenarios.contains(.playlistPlayStart)
             || selectedScenarios.contains(.radioScroll)
+            || selectedScenarios.contains(.warmStart30s)
+            || selectedScenarios.contains(.backgroundForegroundCycle)
+            || selectedScenarios.contains(.miniToFullPlayer)
+            || selectedScenarios.contains(.skipBurst)
             || selectedScenarios.contains(.logout)
     }
 }
@@ -1499,6 +1511,10 @@ final class Runner: ObservableObject {
             "ColdLaunch": "Cold Launch",
             "testWarmResumeTime": "Warm Resume",
             "WarmResume": "Warm Resume",
+            "testWarmStart30s": "Warm Start (<30s)",
+            "WarmStart30s": "Warm Start (<30s)",
+            "testBackgroundForegroundCycle": "BG/FG Cycle",
+            "BackgroundForegroundCycle": "BG/FG Cycle",
             "testLoginSpeed": "Login",
             "Login": "Login",
             "testTabSwitchJourney": "Tab Switch Journey",
@@ -1517,6 +1533,10 @@ final class Runner: ObservableObject {
             "PodcastPlayStart": "Podcast Play Start",
             "testPlaylistLoad": "Playlist Play Start",
             "PlaylistPlayStart": "Playlist Play Start",
+            "testMiniToFullPlayerTransition": "Mini → Full Player",
+            "MiniToFullPlayer": "Mini → Full Player",
+            "testSkipBurst": "Skip Burst",
+            "SkipBurst": "Skip Burst",
             "testLogoutSpeed": "Logout",
             "Logout": "Logout",
         ]
