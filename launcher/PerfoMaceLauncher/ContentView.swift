@@ -28,17 +28,16 @@ struct ContentView: View {
         return formatter
     }()
 
-    // Premium dark SaaS theme tokens.
-    // Slightly lifted dark theme (less pitch-black) + crimson accent.
-    private let appBg = Color(red: 0.07, green: 0.08, blue: 0.10) // ~#11151A
-    private let surface = Color(red: 0.12, green: 0.13, blue: 0.17) // ~#1F2230
-    private let border = Color(red: 0.16, green: 0.18, blue: 0.23) // #2A2F3A
-    private let textPrimary = Color(red: 0.90, green: 0.92, blue: 0.95) // #E6EAF2
-    private let textSecondary = Color(red: 0.60, green: 0.64, blue: 0.70) // #9AA4B2
+    // Light + crimson theme (higher contrast for readability).
+    private let appBg = Color(red: 0.985, green: 0.985, blue: 0.995) // ~#FBFBFE
+    private let surface = Color.white
+    private let border = Color(red: 0.89, green: 0.90, blue: 0.92) // ~#E3E6EA
+    private let textPrimary = Color(red: 0.07, green: 0.09, blue: 0.13) // ~#111827
+    private let textSecondary = Color(red: 0.29, green: 0.33, blue: 0.40) // ~#4B5563
     private let textMuted = Color(red: 0.42, green: 0.45, blue: 0.50) // #6B7280
-    private let deepSapphire = Color(red: 0.90, green: 0.92, blue: 0.95)
-    private let warmGold = Color(red: 0.11, green: 0.12, blue: 0.16)
-    private let mist = Color(red: 0.16, green: 0.18, blue: 0.23)
+    private let deepSapphire = Color(red: 0.07, green: 0.09, blue: 0.13)
+    private let warmGold = Color(red: 0.98, green: 0.97, blue: 0.93) // warm surface tint
+    private let mist = Color(red: 0.93, green: 0.94, blue: 0.96) // light divider
 
     private let sapphire = Color(red: 0.86, green: 0.11, blue: 0.20) // crimson
     private let success = Color(red: 0.13, green: 0.77, blue: 0.37) // #22C55E
@@ -46,9 +45,9 @@ struct ContentView: View {
     private let rose = Color(red: 0.94, green: 0.27, blue: 0.27) // #EF4444
 
     private let golden = Color(red: 0.96, green: 0.62, blue: 0.04) // maps to warning
-    private let panelBorder = Color(red: 0.16, green: 0.18, blue: 0.23)
-    private let panelFill = Color(red: 0.11, green: 0.12, blue: 0.16)
-    private let brandInk = Color(red: 0.06, green: 0.07, blue: 0.08)
+    private let panelBorder = Color(red: 0.89, green: 0.90, blue: 0.92)
+    private let panelFill = Color(red: 0.97, green: 0.97, blue: 0.98)
+    private let brandInk = Color(red: 0.07, green: 0.09, blue: 0.13)
     private let brandCyan = Color(red: 0.36, green: 0.42, blue: 0.75)
     private let brandBlue = Color(red: 0.36, green: 0.42, blue: 0.75)
     private let brandOrange = Color(red: 0.96, green: 0.62, blue: 0.04)
@@ -162,7 +161,7 @@ struct ContentView: View {
                 sidebarBackground
                 sidebarContent
             }
-            .navigationSplitViewColumnWidth(min: 500, ideal: 560, max: 620)
+            .navigationSplitViewColumnWidth(min: 440, ideal: 490, max: 560)
         } detail: {
             ZStack(alignment: .topTrailing) {
                 detailBackground
@@ -241,7 +240,7 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 180, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [sapphire.opacity(0.20), Color.clear],
+                        colors: [sapphire.opacity(0.14), Color.clear],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -253,7 +252,7 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 180, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [warning.opacity(0.10), Color.clear],
+                        colors: [warning.opacity(0.06), Color.clear],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -269,13 +268,13 @@ struct ContentView: View {
         ZStack {
             appBg
             RoundedRectangle(cornerRadius: 180, style: .continuous)
-                .fill(sapphire.opacity(0.12))
+                .fill(sapphire.opacity(0.10))
                 .frame(width: 520, height: 360)
                 .rotationEffect(.degrees(-12))
                 .offset(x: 320, y: -220)
 
             RoundedRectangle(cornerRadius: 220, style: .continuous)
-                .fill(warning.opacity(0.08))
+                .fill(warning.opacity(0.06))
                 .frame(width: 620, height: 420)
                 .rotationEffect(.degrees(10))
                 .offset(x: -340, y: 260)
@@ -459,7 +458,7 @@ struct ContentView: View {
 
     private var sidebarContent: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 header
                 runSummaryStrip
                 codebaseSection
@@ -470,13 +469,13 @@ struct ContentView: View {
                     advancedSection
                 }
             }
-            .padding(14)
-            .frame(minWidth: 500, maxWidth: 820, alignment: .leading)
+            .padding(10)
+            .frame(minWidth: 440, maxWidth: 760, alignment: .leading)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             sidebarFooter
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
         }
     }
 
@@ -1973,7 +1972,7 @@ struct ContentView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(panelBorder, lineWidth: 1)
             )
-            .shadow(color: Color.black.opacity(0.25), radius: 20, x: 0, y: 6)
+            .shadow(color: Color.black.opacity(0.10), radius: 18, x: 0, y: 6)
     }
 
     private func cardBackground(cornerRadius: CGFloat) -> some View {
@@ -1983,7 +1982,7 @@ struct ContentView: View {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(panelBorder, lineWidth: 1)
             )
-            .shadow(color: Color.black.opacity(0.25), radius: 20, x: 0, y: 6)
+            .shadow(color: Color.black.opacity(0.10), radius: 18, x: 0, y: 6)
     }
 
     private struct TimelineEntry: Identifiable {
@@ -2161,10 +2160,10 @@ private struct ScenarioTile: View {
 
     @State private var isHovering = false
 
-    private let surface = Color(red: 0.11, green: 0.12, blue: 0.16)
-    private let border = Color(red: 0.16, green: 0.18, blue: 0.23)
-    private let textPrimary = Color(red: 0.90, green: 0.92, blue: 0.95)
-    private let textSecondary = Color(red: 0.60, green: 0.64, blue: 0.70)
+    private let surface = Color.white
+    private let border = Color(red: 0.89, green: 0.90, blue: 0.92)
+    private let textPrimary = Color(red: 0.07, green: 0.09, blue: 0.13)
+    private let textSecondary = Color(red: 0.35, green: 0.38, blue: 0.45)
 
     var body: some View {
         Button {
@@ -2175,7 +2174,7 @@ private struct ScenarioTile: View {
             HStack(spacing: 10) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(isOn ? accent.opacity(0.20) : Color.black.opacity(0.18))
+                        .fill(isOn ? accent.opacity(0.14) : Color.black.opacity(0.04))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .stroke(isOn ? accent.opacity(0.55) : border, lineWidth: 1)
@@ -2200,7 +2199,7 @@ private struct ScenarioTile: View {
 
                 ZStack {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(isOn ? accent.opacity(0.18) : Color.black.opacity(0.10))
+                        .fill(isOn ? accent.opacity(0.12) : Color.black.opacity(0.03))
                     Circle()
                         .fill(isOn ? accent : border)
                         .frame(width: 10, height: 10)
@@ -2216,7 +2215,7 @@ private struct ScenarioTile: View {
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .stroke(isOn ? accent.opacity(0.70) : border, lineWidth: 1)
                     )
-                    .shadow(color: Color.black.opacity(isOn ? 0.35 : 0.22), radius: 20, x: 0, y: 6)
+                    .shadow(color: Color.black.opacity(isOn ? 0.12 : 0.08), radius: 18, x: 0, y: 6)
             )
             .scaleEffect(isHovering ? 1.01 : 1.0)
         }
@@ -2237,10 +2236,10 @@ private struct TraceLaneChip: View {
 
     @State private var pulse = false
     private let sapphire = Color(red: 0.86, green: 0.11, blue: 0.20)
-    private let deepSapphire = Color(red: 0.04, green: 0.14, blue: 0.35)
-    private let rose = Color(red: 0.80, green: 0.23, blue: 0.27)
-    private let surfaceFill = Color(red: 0.12, green: 0.13, blue: 0.17)
-    private let surfaceBorder = Color(red: 0.16, green: 0.18, blue: 0.23)
+    private let deepSapphire = Color(red: 0.07, green: 0.09, blue: 0.13)
+    private let rose = Color(red: 0.94, green: 0.27, blue: 0.27)
+    private let surfaceFill = Color(red: 0.97, green: 0.97, blue: 0.98)
+    private let surfaceBorder = Color(red: 0.89, green: 0.90, blue: 0.92)
 
     private var isLive: Bool {
         switch state.lowercased() {
