@@ -2613,19 +2613,19 @@ struct CardGroupBoxStyle: GroupBoxStyle {
         VStack(alignment: .leading, spacing: 10) {
             configuration.label
                 .font(.system(size: 13, weight: .semibold, design: .default))
-                .foregroundStyle(Color(red: 0.90, green: 0.92, blue: 0.95))
+                .foregroundStyle(Color(red: 0.07, green: 0.09, blue: 0.13))
             configuration.content
         }
-        .padding(12)
+        .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(red: 0.11, green: 0.12, blue: 0.16))
+                .fill(Color(red: 0.97, green: 0.97, blue: 0.98))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color(red: 0.16, green: 0.18, blue: 0.23), lineWidth: 1)
+                        .stroke(Color(red: 0.89, green: 0.90, blue: 0.92), lineWidth: 1)
                 )
         )
-        .shadow(color: Color.black.opacity(0.25), radius: 20, x: 0, y: 6)
+        .shadow(color: Color.black.opacity(0.10), radius: 18, x: 0, y: 6)
     }
 }
 
@@ -2635,7 +2635,7 @@ private struct CollapsibleCard<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     isExpanded.toggle()
@@ -2644,10 +2644,10 @@ private struct CollapsibleCard<Content: View>: View {
                 HStack(spacing: 10) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 12, weight: .semibold, design: .default))
-                        .foregroundStyle(Color(red: 0.60, green: 0.64, blue: 0.70))
+                        .foregroundStyle(Color(red: 0.42, green: 0.45, blue: 0.50))
                     Text(title)
                         .font(.system(size: 12.5, weight: .semibold, design: .default))
-                        .foregroundStyle(Color(red: 0.90, green: 0.92, blue: 0.95))
+                        .foregroundStyle(Color(red: 0.07, green: 0.09, blue: 0.13))
                     Spacer()
                 }
                 .contentShape(Rectangle())
@@ -2659,15 +2659,15 @@ private struct CollapsibleCard<Content: View>: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(12)
+        .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(red: 0.12, green: 0.13, blue: 0.17))
+                .fill(Color(red: 0.97, green: 0.97, blue: 0.98))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color(red: 0.16, green: 0.18, blue: 0.23), lineWidth: 1)
+                        .stroke(Color(red: 0.89, green: 0.90, blue: 0.92), lineWidth: 1)
                 )
         )
-        .shadow(color: Color.black.opacity(0.25), radius: 20, x: 0, y: 6)
+        .shadow(color: Color.black.opacity(0.10), radius: 18, x: 0, y: 6)
     }
 }
