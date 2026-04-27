@@ -1,6 +1,7 @@
 import XCTest
 import Foundation
 import Darwin
+import UIKit
 
 private enum PerfTestConfig {
     static let appBundleId = "PERF_APP_BUNDLE_ID"
@@ -194,6 +195,51 @@ class iHeartPerfTests: XCTestCase {
         }
     }
 
+    // MARK: - 2b. WARM START (<30s background) TO PLAYABLE UI
+    func testWarmStart30s() {
+        ensureLoggedIn()
+        returnToRootIfNeeded()
+        dismissAdsIfPresent(reason: "beforeWarmStart30s")
+
+        // Prime the app on a stable surface so the resume timing is meaningful.
+        selectTab(label: UI.homeTab, identifier: "homeTab")
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 6))
+
+        _ = measureOnce("WarmStart30s") {
+            backgroundApp(seconds: 10)
+            app.activate()
+            clearInterferingPrompts(reason: "afterWarmStart30sActivate", timeout: 1.0)
+            dismissAdsIfPresent(reason: "afterWarmStart30sActivate")
+            if !waitForPlayableSurfaceAfterResume(timeout: isLegacyRun ? 10 : 8) {
+                dumpAccessibilityTree("WarmStartPlayableSurfaceMissing")
+                XCTFail("Warm start did not return to a playable surface.")
+            }
+        }
+    }
+
+    // MARK: - 2c. BACKGROUND/FOREGROUND STABILITY (short cycles)
+    func testBackgroundForegroundCycle() {
+        ensureLoggedIn()
+        returnToRootIfNeeded()
+        dismissAdsIfPresent(reason: "beforeBackgroundForegroundCycle")
+        selectTab(label: UI.homeTab, identifier: "homeTab")
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 6))
+
+        _ = measureMetricsOnce("BackgroundForegroundCycle") {
+            for _ in 0..<3 {
+                backgroundApp(seconds: 2)
+                app.activate()
+                clearInterferingPrompts(reason: "afterBGFGActivate", timeout: 0.8)
+                dismissAdsIfPresent(reason: "afterBGFGActivate")
+                if !waitForPlayableSurfaceAfterResume(timeout: isLegacyRun ? 8 : 6) {
+                    dumpAccessibilityTree("BGFGPlayableSurfaceMissing")
+                    XCTFail("Background/Foreground cycle did not return to a playable surface.")
+                    break
+                }
+            }
+        }
+    }
+
     // MARK: - 3. SEARCH PERFORMANCE
     func testSearchSpeed() {
         ensureLoggedIn()
@@ -212,6 +258,88 @@ class iHeartPerfTests: XCTestCase {
                 XCTFail("Search results not found.")
                 return
             }
+        }
+    }
+
+    // MARK: - 3b. MINI PLAYER -> FULL PLAYER TRANSITION
+    func testMiniToFullPlayerTransition() {
+        ensureLoggedIn()
+        returnToRootIfNeeded()
+        dismissAdsIfPresent(reason: "beforeMiniToFullPlayer")
+
+        // Ensure we have a mini player present by starting playback if needed.
+        if !hasVisibleMiniPlayerContainer() {
+            selectTab(label: "Radio", identifier: "radioTab")
+            if let stationTarget = firstRadioStationTarget() {
+                _ = measureOptionalMetricsOnce("MiniToFullPlayer_PrimePlayback") {
+                    stationTarget.forceTap()
+                    guard waitForRadioDetail(timeout: isLegacyRun ? 10 : 8) else { return false }
+                    startPlaybackIfNeeded(context: "MiniToFullPrimePlayback")
+                    return waitForPlaybackStarted(timeout: isLegacyRun ? 18 : 10)
+                }
+            }
+        }
+
+        _ = measureOptionalMetricsOnce("MiniToFullPlayer") {
+            guard hasVisibleMiniPlayerContainer() else { return false }
+            let mini = miniPlayerContainerElement()
+            clearInterferingPrompts(reason: "beforeMiniToFullTap", timeout: 0.8)
+            mini.forceTap()
+            return waitForNowPlayingExpanded(timeout: isLegacyRun ? 10 : 8)
+        }
+    }
+
+    // MARK: - 3c. SEEK/SKIP BURST (best-effort UI only)
+    func testSkipBurst() {
+        ensureLoggedIn()
+        returnToRootIfNeeded()
+        dismissAdsIfPresent(reason: "beforeSkipBurst")
+
+        // Ensure playback is active.
+        if !hasVisibleMiniPlayerContainer() {
+            selectTab(label: "Radio", identifier: "radioTab")
+            if let stationTarget = firstRadioStationTarget() {
+                _ = measureOptionalMetricsOnce("SkipBurst_PrimePlayback") {
+                    stationTarget.forceTap()
+                    guard waitForRadioDetail(timeout: isLegacyRun ? 10 : 8) else { return false }
+                    startPlaybackIfNeeded(context: "SkipBurstPrimePlayback")
+                    return waitForPlaybackStarted(timeout: isLegacyRun ? 18 : 10)
+                }
+            }
+        }
+
+        _ = measureOptionalMetricsOnce("SkipBurst") {
+            guard hasVisibleMiniPlayerContainer() else { return false }
+            miniPlayerContainerElement().forceTap()
+            guard waitForNowPlayingExpanded(timeout: isLegacyRun ? 10 : 8) else { return false }
+
+            // Tap forward/back candidates if present. We don't assert the content changes because
+            // station/podcast/playlist behavior varies; we just verify the UI remains responsive.
+            let forwardCandidates = [
+                app.buttons["NowPlaying-SkipForward-Button"],
+                app.buttons["NowPlaying-Forward-Button"],
+                app.buttons["PlayerView-Forward-Button"],
+                app.buttons.matching(NSPredicate(format: "identifier CONTAINS[c] 'skip' AND (identifier CONTAINS[c] 'forward' OR label CONTAINS[c] 'forward')")).firstMatch,
+            ]
+            let backCandidates = [
+                app.buttons["NowPlaying-SkipBack-Button"],
+                app.buttons["NowPlaying-Back-Button"],
+                app.buttons["PlayerView-Back-Button"],
+                app.buttons.matching(NSPredicate(format: "identifier CONTAINS[c] 'skip' AND (identifier CONTAINS[c] 'back' OR label CONTAINS[c] 'back')")).firstMatch,
+            ]
+
+            let taps = 6
+            for i in 0..<taps {
+                clearInterferingPrompts(reason: "skipBurstTap_\(i)", timeout: 0.4)
+                dismissAdsIfPresent(reason: "skipBurstTap_\(i)")
+                _ = tapFirstExisting(i % 2 == 0 ? forwardCandidates : backCandidates, context: "SkipBurstTapMissing", failIfMissing: false)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+            }
+
+            // If we can still see a playback surface, we consider the burst successful.
+            return app.buttons["NowPlaying-Pause-Button"].exists
+                || app.buttons["NowPlaying-Stop-Button"].exists
+                || hasVisibleMiniPlayerContainer()
         }
     }
 
@@ -728,6 +856,51 @@ class iHeartPerfTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         } while Date() < deadline
     }
+
+    private func backgroundApp(seconds: TimeInterval) {
+        // Best-effort: background the app and wait. On some environments this can be flaky, but
+        // the scenario still emits a metric row either way.
+        XCUIDevice.shared.press(.home)
+        RunLoop.current.run(until: Date().addingTimeInterval(max(0.5, seconds)))
+    }
+
+    private func waitForPlayableSurfaceAfterResume(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            clearInterferingPrompts(reason: "waitForPlayableSurfaceAfterResume", timeout: 0.6)
+            if loggedInShellVisible() { return true }
+            if hasVisibleMiniPlayerContainer() { return true }
+            if app.tabBars.firstMatch.exists { return true }
+            if currentAppErrorMessage() != nil { return false }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        } while Date() < deadline
+        return loggedInShellVisible() || hasVisibleMiniPlayerContainer() || app.tabBars.firstMatch.exists
+    }
+
+    private func waitForNowPlayingExpanded(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            clearInterferingPrompts(reason: "waitForNowPlayingExpanded", timeout: 0.6)
+            dismissAdsIfPresent(reason: "waitForNowPlayingExpanded")
+
+            let nowPlayingControls =
+                app.buttons["NowPlaying-Play-Button"].exists ||
+                app.buttons["NowPlaying-Pause-Button"].exists ||
+                app.buttons["NowPlaying-Stop-Button"].exists
+            let nowPlayingArtwork = app.images["NowPlaying-IHRImageView-View"].exists
+            let legacyPlayerSurface =
+                app.buttons["PlayerView-PlayButton-UIButton"].exists ||
+                app.buttons["NewPlayButton-Play-UIButton"].exists ||
+                app.otherElements["PlayerView-ButtonContainer-UIView"].exists
+
+            if (nowPlayingArtwork && nowPlayingControls) || legacyPlayerSurface {
+                return true
+            }
+            if currentAppErrorMessage() != nil { return false }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        } while Date() < deadline
+        return false
+    }
     
     private func isLoggedIn() -> Bool {
         if loggedInShellVisible() { return true }
@@ -1011,7 +1184,7 @@ class iHeartPerfTests: XCTestCase {
         @unknown default: thermalLabel = "unknown"
         }
 
-        let device = XCUIDevice.shared
+        let device = UIDevice.current
         device.isBatteryMonitoringEnabled = true
         let batteryLevel = device.batteryLevel
         let batteryLevelLabel = batteryLevel < 0 ? "unknown" : String(format: "%.2f", batteryLevel)
